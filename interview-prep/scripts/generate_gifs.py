@@ -13,6 +13,7 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle, Rectangl
 import matplotlib as mpl
 import numpy as np
 import imageio.v2 as imageio
+from PIL import Image
 
 # 中文字体（高清渲染）
 mpl.rcParams["font.family"] = ["WenQuanYi Micro Hei", "DejaVu Sans", "sans-serif"]
@@ -41,12 +42,14 @@ DPI = 200
 W, H = TARGET_W / DPI, TARGET_H / DPI   # 19.2 × 10.8 inch → 3840×2160 px
 FONT_SCALE = TARGET_W / 1400            # 相对旧版缩放 (~2.74×)
 
-FRAME_DURATION = 2.4        # 每帧停留秒数（慢速，便于阅读）
-HOLD_STEP = 4                 # 普通步骤重复帧
-HOLD_RESULT = 6               # 关键结果步骤
-HOLD_FAST = 3                 # DFS 等细碎步骤
-HOLD_LITE = 2                 # 全排列等长动画（避免过长）
-FRAME_DURATION_LITE = 2.0     # 长动画每帧时长
+# 播放节奏：每个算法步骤 1 秒后再跳转到下一步（单帧 + 精确 1000ms 延迟）
+FRAME_DURATION = 1.0          # 普通步骤：1 秒/跳
+HOLD_STEP = 1                   # 每步仅 1 帧，避免重复帧被播放器合并加速
+HOLD_RESULT = 2                 # 关键结果：停 2 秒（2 帧 × 1s）
+HOLD_FAST = 1                   # DFS 细碎步骤：1 秒/跳
+HOLD_LITE = 1                   # 全排列等长动画：1 秒/跳
+FRAME_DURATION_LITE = 1.0
+FRAME_DURATION_RESULT = 1.0     # 结果帧也按 1 秒计，靠 HOLD_RESULT 加长
 
 
 def fs(size: float) -> float:
@@ -74,9 +77,22 @@ def setup_ax(title: str, subtitle: str = ""):
 
 
 def save_gif(name: str, frames: List[np.ndarray], duration: float = FRAME_DURATION):
+    """保存 GIF，使用 PIL 精确设置每帧延迟（毫秒），确保 1 秒/跳。"""
     path = os.path.join(OUT_DIR, f"{name}.gif")
-    imageio.mimsave(path, frames, duration=duration, loop=0, palettesize=256)
-    print(f"  ✓ {path}  ({len(frames)} frames, {duration}s/frame, {TARGET_W}×{TARGET_H})")
+    if not frames:
+        return
+    delay_ms = max(100, int(duration * 1000))  # GIF 最小 100ms，1s = 1000ms
+    pil_frames = [Image.fromarray(f) for f in frames]
+    pil_frames[0].save(
+        path,
+        save_all=True,
+        append_images=pil_frames[1:],
+        duration=delay_ms,
+        loop=0,
+        optimize=False,
+    )
+    total_s = len(frames) * delay_ms / 1000
+    print(f"  ✓ {path}  ({len(frames)} frames, {delay_ms}ms/帧, 总时长≈{total_s:.0f}s, {TARGET_W}×{TARGET_H})")
 
 
 def fig_to_array(fig) -> np.ndarray:
