@@ -17,6 +17,7 @@
 9. [训练使用](#9-训练使用)
 10. [Checklist 与常见问题](#10-checklist-与常见问题)
 11. [一周数据示例：本地服务器完整工作流](#11-一周数据示例本地服务器完整工作流)
+12. [实操：一个月数据只用第二周新建数据集](#12-实操一个月数据只用第二周新建数据集)
 
 ---
 
@@ -1242,6 +1243,474 @@ dataset.finalize()
 4. **训练只读本地 `/data/lerobot/`**：无需 Hub，适合内网服务器
 5. **失败 episode 保留但不导入**：raw 层全留，构建时 `success=true` 过滤
 6. **每周五统一构建**：减少频繁 `finalize()` 和 stats 重算；紧急时可手动 trigger
+
+---
+
+## 12. 实操：一个月数据只用第二周新建数据集
+
+**场景**：7 月整月每天都在 `/data/raw/` 采集，但某次实验你**只要第二周（07-14 ~ 07-20）的数据**来训练一个新模型。第一、三、四周的 raw 数据保留不动，不导入这个数据集。
+
+**核心原则**：
+
+- **不需要移动或复制 raw 文件**，文件一直在原日期目录下
+- **不需要改 `episode_meta.json`**，筛选靠 `manifest.jsonl` 的 `date` 字段
+- 用 **`LeRobotDataset.create()` 新建**数据集目录，**不要用 `resume()`**
+- 构建后只更新**被导入那几行** manifest 的 `imported_to`
+
+### 12.1 一个月 raw 层长什么样（文件不用动）
+
+```
+/data/raw/
+├── manifest.jsonl                 # 全月索引（约 800+ 行）
+├── schema/v1_features.json
+│
+├── 2025-07-07/ ... 2025-07-13/    # 第 1 周（不导入本次数据集）
+├── 2025-07-14/ ... 2025-07-20/    # 第 2 周 ★ 只导入这些
+├── 2025-07-21/ ... 2025-07-27/    # 第 3 周（不导入）
+└── 2025-07-28/ ... 2025-07-31/    # 第 4 周（不导入）
+```
+
+第二周某条 episode 的物理路径示例（**采集时已就位，构建时只读**）：
+
+```
+/data/raw/2025-07-16/am_real_001/episode_007/
+├── episode_meta.json
+├── export/
+│   ├── states.parquet
+│   ├── actions.parquet
+│   └── timestamps.parquet
+└── cameras/
+    ├── front/frames/000000.jpg ...
+    └── wrist/frames/000000.jpg ...
+```
+
+> **不用**把第二周文件拷到别处；构建脚本按 manifest 里的 `path` 字段直接读取。
+
+### 12.2 `manifest.jsonl`：构建前长什么样
+
+全月 manifest 是一个文件，每周的 episode 混在里面。下面截取有代表性的几行（中间用 `...` 省略）：
+
+**`/data/raw/manifest.jsonl`（构建前，节选）**
+
+```jsonl
+{"date":"2025-07-07","session":"am_real_001","episode":"episode_000","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":120,"schema":"v1","path":"2025-07-07/am_real_001/episode_000","imported_to":null}
+{"date":"2025-07-07","session":"am_real_001","episode":"episode_001","source":"ros","task":"pick_red_block","success":false,"fps":30,"frames":80,"schema":"v1","path":"2025-07-07/am_real_001/episode_001","imported_to":null}
+...
+{"date":"2025-07-13","session":"cam_backup_001","episode":"episode_004","source":"mp4","task":"pick_red_block","success":true,"fps":30,"frames":110,"schema":"v1","path":"2025-07-13/cam_backup_001/episode_004","imported_to":null}
+{"date":"2025-07-14","session":"am_real_001","episode":"episode_000","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":125,"schema":"v1","path":"2025-07-14/am_real_001/episode_000","imported_to":null}
+{"date":"2025-07-14","session":"am_real_001","episode":"episode_001","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":118,"schema":"v1","path":"2025-07-14/am_real_001/episode_001","imported_to":null}
+{"date":"2025-07-15","session":"pm_real_001","episode":"episode_003","source":"ros","task":"pick_red_block","success":false,"fps":30,"frames":65,"schema":"v1","path":"2025-07-15/pm_real_001/episode_003","imported_to":null}
+...
+{"date":"2025-07-18","session":"sim_batch_001","episode":"episode_012","source":"sim","task":"pick_red_block","success":true,"fps":30,"frames":90,"schema":"v1","path":"2025-07-18/sim_batch_001/episode_012","imported_to":null}
+...
+{"date":"2025-07-20","session":"pm_real_001","episode":"episode_019","source":"ros","task":"place_in_bin","success":true,"fps":30,"frames":142,"schema":"v1","path":"2025-07-20/pm_real_001/episode_019","imported_to":null}
+...
+{"date":"2025-07-21","session":"am_real_001","episode":"episode_000","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":130,"schema":"v1","path":"2025-07-21/am_real_001/episode_000","imported_to":null}
+...
+{"date":"2025-07-31","session":"am_real_001","episode":"episode_022","source":"ros","task":"place_in_bin","success":true,"fps":30,"frames":135,"schema":"v1","path":"2025-07-31/am_real_001/episode_022","imported_to":null}
+```
+
+**第二周统计（示例）：**
+
+| 指标 | 数量 |
+|------|------|
+| 第二周总 episode | 198 |
+| `success=true` | 175 |
+| `success=false` | 23 |
+| 本次实际导入 | **175**（只导入成功的） |
+
+### 12.3 `episode_meta.json`：要不要改？
+
+**不用改。** 它描述单条 episode 自身属性，构建脚本只读取，不修改。
+
+`/data/raw/2025-07-16/am_real_001/episode_007/episode_meta.json` 保持原样：
+
+```json
+{
+  "episode_id": "episode_007",
+  "task": "pick_red_block",
+  "success": true,
+  "source": "ros",
+  "fps": 30,
+  "frames": 122,
+  "duration_sec": 4.07,
+  "operator": "bob",
+  "robot_id": "arm_01",
+  "started_at": "2025-07-16T10:23:15+08:00",
+  "ended_at": "2025-07-16T10:23:19+08:00",
+  "notes": "",
+  "imported_to": null,
+  "imported_at": null
+}
+```
+
+> 导入状态统一由 **`manifest.jsonl`** 追踪；`episode_meta.json` 里的 `imported_to` 可选同步，非必须。
+
+### 12.4 第一步：生成第二周筛选清单（推荐）
+
+从全月 manifest 切出第二周子集，便于复查和重复构建：
+
+```bash
+# 在 robot-server 上执行
+python /data/scripts/filter_manifest.py \
+  --input  /data/raw/manifest.jsonl \
+  --output /data/builds/2025-07-w2/import_list.jsonl \
+  --date-from 2025-07-14 \
+  --date-to   2025-07-20 \
+  --success-only
+```
+
+**`filter_manifest.py` 逻辑：**
+
+```python
+import json, argparse
+from datetime import date
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input")
+parser.add_argument("--output")
+parser.add_argument("--date-from")   # 2025-07-14
+parser.add_argument("--date-to")     # 2025-07-20
+parser.add_argument("--success-only", action="store_true")
+args = parser.parse_args()
+
+d_from = date.fromisoformat(args.date_from)
+d_to   = date.fromisoformat(args.date_to)
+
+selected = []
+with open(args.input) as f:
+    for line in f:
+        rec = json.loads(line)
+        d = date.fromisoformat(rec["date"])
+        if d_from <= d <= d_to:
+            if args.success_only and not rec["success"]:
+                continue
+            selected.append(rec)
+
+Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+with open(args.output, "w") as f:
+    for rec in selected:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+print(f"selected {len(selected)} episodes → {args.output}")
+```
+
+**生成的 `/data/builds/2025-07-w2/import_list.jsonl`（前 3 行）：**
+
+```jsonl
+{"date":"2025-07-14","session":"am_real_001","episode":"episode_000","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":125,"schema":"v1","path":"2025-07-14/am_real_001/episode_000","imported_to":null}
+{"date":"2025-07-14","session":"am_real_001","episode":"episode_001","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":118,"schema":"v1","path":"2025-07-14/am_real_001/episode_001","imported_to":null}
+{"date":"2025-07-14","session":"pm_real_001","episode":"episode_002","source":"ros","task":"pick_red_block","success":true,"fps":30,"frames":130,"schema":"v1","path":"2025-07-14/pm_real_001/episode_002","imported_to":null}
+```
+
+人工确认条数：
+
+```bash
+wc -l /data/builds/2025-07-w2/import_list.jsonl
+# 175 import_list.jsonl
+```
+
+### 12.5 第二步：新建 LeRobot 数据集（create，不是 resume）
+
+**新数据集用独立目录和名字**，与全月或其他周的数据集隔离：
+
+```
+/data/lerobot/pick-place-w2-202507/     # 新建，空目录
+```
+
+**执行命令：**
+
+```bash
+python /data/scripts/build_lerobot_dataset.py \
+  --mode create \
+  --raw-root /data/raw \
+  --dataset-root /data/lerobot/pick-place-w2-202507 \
+  --repo-id "local/pick-place-w2-202507" \
+  --schema /data/raw/schema/v1_features.json \
+  --import-list /data/builds/2025-07-w2/import_list.jsonl \
+  --log-dir /data/builds/2025-07-w2
+```
+
+> **注意**：`--mode create` 强制新建；即使存在 `/data/lerobot/pick-place-v1` 也不 resume。
+
+**`build_lerobot_dataset.py` 关键代码：**
+
+```python
+import json
+from pathlib import Path
+import numpy as np
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+RAW_ROOT = Path("/data/raw")
+DATASET_ROOT = Path("/data/lerobot/pick-place-w2-202507")
+IMPORT_LIST = Path("/data/builds/2025-07-w2/import_list.jsonl")
+SCHEMA = json.loads((RAW_ROOT / "schema/v1_features.json").read_text())
+
+# ① 读取筛选清单（只有第二周 175 条）
+pending = [json.loads(l) for l in IMPORT_LIST.read_text().splitlines() if l.strip()]
+
+# ② 新建数据集（不是 resume！）
+dataset = LeRobotDataset.create(
+    repo_id="local/pick-place-w2-202507",
+    root=DATASET_ROOT,
+    fps=SCHEMA["fps"],                    # 30
+    robot_type=SCHEMA["robot_type"],      # "custom_arm"
+    features=SCHEMA["features"],
+    use_videos=True,
+)
+
+# ③ 按清单逐条导入——文件从 raw 原路径读取，不复制
+imported_paths = []
+for rec in pending:
+    ep_dir = RAW_ROOT / rec["path"]       # 例：/data/raw/2025-07-16/am_real_001/episode_007
+    assert ep_dir.exists(), f"missing: {ep_dir}"
+
+    states, actions, images = load_episode(ep_dir, source=rec["source"])
+
+    for t in range(len(states)):
+        dataset.add_frame({
+            "observation.state": states[t].astype(np.float32),
+            "action": actions[t].astype(np.float32),
+            "observation.images.front": images["front"][t],
+            "observation.images.wrist": images["wrist"][t],
+            "task": rec["task"],
+        })
+    dataset.save_episode()
+    imported_paths.append(rec["path"])
+
+# ④ 落盘
+dataset.finalize()
+
+# ⑤ 只更新 manifest 里被导入的行
+update_manifest_imported(
+    manifest_path=RAW_ROOT / "manifest.jsonl",
+    imported_paths=imported_paths,
+    dataset_id="local/pick-place-w2-202507",
+)
+```
+
+**`load_episode` 读文件示例（ROS 源）：**
+
+```python
+def load_episode(ep_dir: Path, source: str):
+    if source == "ros":
+        import pandas as pd
+        states  = pd.read_parquet(ep_dir / "export/states.parquet").values
+        actions = pd.read_parquet(ep_dir / "export/actions.parquet").values
+        front_dir = ep_dir / "cameras/front/frames"
+        wrist_dir = ep_dir / "cameras/wrist/frames"
+        images = {
+            "front": [read_jpg(front_dir / f"{i:06d}.jpg") for i in range(len(states))],
+            "wrist": [read_jpg(wrist_dir / f"{i:06d}.jpg") for i in range(len(states))],
+        }
+    elif source == "sim":
+        # 从 rollout.hdf5 读取 ...
+        ...
+  return states, actions, images
+```
+
+### 12.6 构建后：各 JSON 怎么变
+
+#### A. 新建数据集的 `info.json`（自动生成）
+
+`/data/lerobot/pick-place-w2-202507/meta/info.json`：
+
+```json
+{
+  "codebase_version": "v3.0",
+  "robot_type": "custom_arm",
+  "fps": 30,
+  "total_episodes": 175,
+  "total_frames": 26250,
+  "total_tasks": 2,
+  "chunks_size": 1000,
+  "splits": { "train": "0:175" },
+  "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+  "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+  "data_files_size_in_mb": 100,
+  "video_files_size_in_mb": 500,
+  "features": {
+    "observation.state": { "dtype": "float32", "shape": [6], "names": { "motors": ["j1","j2","j3","j4","j5","j6"] }, "fps": 30.0 },
+    "action": { "dtype": "float32", "shape": [6], "names": { "motors": ["j1","j2","j3","j4","j5","j6"] }, "fps": 30.0 },
+    "observation.images.front": { "dtype": "video", "shape": [480, 640, 3], "names": ["height","width","channel"], "video_info": { "video.fps": 30.0, "video.codec": "av1", "video.pix_fmt": "yuv420p", "video.is_depth_map": false, "has_audio": false } },
+    "observation.images.wrist": { "dtype": "video", "shape": [480, 640, 3], "names": ["height","width","channel"], "video_info": { "video.fps": 30.0, "video.codec": "av1", "video.pix_fmt": "yuv420p", "video.is_depth_map": false, "has_audio": false } },
+    "episode_index": { "dtype": "int64", "shape": [1], "names": null, "fps": 30.0 },
+    "frame_index": { "dtype": "int64", "shape": [1], "names": null, "fps": 30.0 },
+    "timestamp": { "dtype": "float32", "shape": [1], "names": null, "fps": 30.0 },
+    "index": { "dtype": "int64", "shape": [1], "names": null, "fps": 30.0 },
+    "task_index": { "dtype": "int64", "shape": [1], "names": null, "fps": 30.0 },
+    "next.done": { "dtype": "bool", "shape": [1], "names": null, "fps": 30.0 }
+  }
+}
+```
+
+> `total_episodes=175`、`total_frames=26250` 只含第二周；与第一/三/四周无关。
+
+#### B. `manifest.jsonl`：只改被导入的行
+
+**`update_manifest_imported` 逻辑：**
+
+```python
+from datetime import datetime, timezone
+
+def update_manifest_imported(manifest_path, imported_paths, dataset_id):
+    imported_set = set(imported_paths)
+    now = datetime.now(timezone.utc).isoformat()
+    lines_out = []
+
+    with open(manifest_path) as f:
+        for line in f:
+            rec = json.loads(line)
+            if rec["path"] in imported_set:
+                rec["imported_to"] = dataset_id
+                rec["imported_at"] = now
+            lines_out.append(rec)
+
+    with open(manifest_path, "w") as f:
+        for rec in lines_out:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+```
+
+**构建后 manifest 对比（同一文件内，不同行状态不同）：**
+
+```jsonl
+{"date":"2025-07-07",...,"path":"2025-07-07/am_real_001/episode_000","imported_to":null,"imported_at":null}
+{"date":"2025-07-13",...,"path":"2025-07-13/cam_backup_001/episode_004","imported_to":null,"imported_at":null}
+{"date":"2025-07-14",...,"path":"2025-07-14/am_real_001/episode_000","imported_to":"local/pick-place-w2-202507","imported_at":"2025-07-22T11:30:00+00:00"}
+{"date":"2025-07-16",...,"path":"2025-07-16/am_real_001/episode_007","imported_to":"local/pick-place-w2-202507","imported_at":"2025-07-22T11:30:00+00:00"}
+{"date":"2025-07-15",...,"path":"2025-07-15/pm_real_001/episode_003","success":false,...,"imported_to":null,"imported_at":null}
+{"date":"2025-07-21",...,"path":"2025-07-21/am_real_001/episode_000","imported_to":null,"imported_at":null}
+```
+
+| 行 | 变化 |
+|----|------|
+| 第一周 `2025-07-07` | `imported_to` 仍为 `null` |
+| 第二周成功 `2025-07-14` | `imported_to` → `"local/pick-place-w2-202507"` |
+| 第二周失败 `2025-07-15` episode_003 | 仍为 `null`（`success=false` 未导入） |
+| 第三周 `2025-07-21` | 仍为 `null` |
+
+#### C. 构建报告 `import_report.json`
+
+`/data/builds/2025-07-w2/import_report.json`：
+
+```json
+{
+  "build_time": "2025-07-22T11:30:00+08:00",
+  "mode": "create",
+  "dataset_id": "local/pick-place-w2-202507",
+  "dataset_root": "/data/lerobot/pick-place-w2-202507",
+  "date_from": "2025-07-14",
+  "date_to": "2025-07-20",
+  "import_list": "/data/builds/2025-07-w2/import_list.jsonl",
+  "imported_episodes": 175,
+  "skipped_in_range": 23,
+  "skipped_reason": "success=false",
+  "total_frames": 26250,
+  "by_source": { "ros": 130, "sim": 40, "mp4": 5 },
+  "by_task": { "pick_red_block": 140, "place_in_bin": 35 }
+}
+```
+
+### 12.7 构建产物目录（第二周数据落在哪）
+
+```
+/data/lerobot/pick-place-w2-202507/          # 新建，只含第二周
+├── meta/
+│   ├── info.json          ← total_episodes=175
+│   ├── stats.json         ← 只对这 175 条算统计量
+│   ├── tasks.parquet
+│   └── episodes/
+│       └── chunk-000/file-000.parquet
+├── data/
+│   └── chunk-000/file-000.parquet
+└── videos/
+    ├── observation.images.front/chunk-000/file-000.mp4
+    └── observation.images.wrist/chunk-000/file-000.mp4
+
+/data/raw/2025-07-14/ ... 2025-07-20/        # 原样保留，不移动
+/data/raw/2025-07-07/ ... 2025-07-13/        # 未动
+/data/raw/2025-07-21/ ...                    # 未动
+```
+
+**数据流向（没有「传文件到 lerobot 目录」的复制步骤）：**
+
+```
+manifest 筛选 date ∈ [07-14, 07-20]
+        │
+        ▼
+读取 /data/raw/2025-07-16/.../export/*.parquet  （只读）
+读取 /data/raw/2025-07-16/.../cameras/*/frames/  （只读）
+        │
+        ▼
+编码写入 /data/lerobot/pick-place-w2-202507/videos/*.mp4  （新文件）
+写入 /data/lerobot/pick-place-w2-202507/data/*.parquet   （新文件）
+```
+
+### 12.8 训练：指向新数据集
+
+```bash
+lerobot-train \
+  --dataset.repo_id=local/pick-place-w2-202507 \
+  --dataset.root=/data/lerobot/pick-place-w2-202507 \
+  --policy.type=act \
+  --output_dir=/data/training/w2-exp-001 \
+  --training.batch_size=32
+```
+
+或 Python：
+
+```python
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+dataset = LeRobotDataset(
+    repo_id="local/pick-place-w2-202507",
+    root="/data/lerobot/pick-place-w2-202507",
+)
+print(dataset.num_episodes)  # 175
+print(dataset.num_frames)    # 26250
+```
+
+### 12.9 后续：第三周想再建另一个数据集
+
+同样流程，换日期范围和目录名即可：
+
+```bash
+python /data/scripts/filter_manifest.py \
+  --date-from 2025-07-21 --date-to 2025-07-27 \
+  --output /data/builds/2025-07-w3/import_list.jsonl --success-only
+
+python /data/scripts/build_lerobot_dataset.py \
+  --mode create \
+  --dataset-root /data/lerobot/pick-place-w3-202507 \
+  --import-list /data/builds/2025-07-w3/import_list.jsonl
+```
+
+同一条 raw episode **可以导入多个数据集**（manifest 可扩展为数组，或另建 `imports.jsonl` 记录多对多关系）。简单做法是 `imported_to` 只记「第一次导入的数据集」，后续用 `import_list` 文件驱动，不依赖 `imported_to=null` 过滤。
+
+### 12.10 操作清单（只用第二周新建）
+
+```
+□ 1. 确认 /data/raw/2025-07-14/ ~ 2025-07-20/ 目录完整
+□ 2. 生成 import_list.jsonl（date 07-14~07-20, success=true）
+□ 3. wc -l 确认条数（例：175）
+□ 4. build --mode create --dataset-root .../pick-place-w2-202507
+□ 5. 检查 info.json：total_episodes 与 import_list 一致
+□ 6. 检查 manifest：仅第二周成功行 imported_to 已更新
+□ 7. 第一/三/四周 manifest 行 imported_to 仍为 null
+□ 8. 训练时 --dataset.root 指向新目录
+```
+
+### 12.11 常见误操作
+
+| 误操作 | 后果 | 正确做法 |
+|--------|------|----------|
+| 用 `resume()` 追加到全月数据集 | 混入其他周数据 | 第二周单独 `create()` 新目录 |
+| 手动复制 raw 到 lerobot 目录 | 浪费磁盘，格式不对 | 脚本读 raw，写入 v3 格式 |
+| 改 `episode_meta.json` 的 date | 与目录不一致 | 只改 manifest 筛选条件 |
+| 不过滤 `success=false` | 失败轨迹进训练集 | `import_list` 加 `--success-only` |
+| 构建后忘记 `finalize()` | parquet 损坏 | 脚本末尾必须 `finalize()` |
+| 用 `imported_to=null` 筛第二周 | 若第一周已导入过会漏数据 | 按 **date 范围** 筛，不靠 `imported_to` |
 
 ---
 
