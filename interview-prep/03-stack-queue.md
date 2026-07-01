@@ -58,13 +58,9 @@ func isValid(s string) bool {
 
 维护递减栈存**下标**，当前温度更高时弹栈并填答案。
 
-```mermaid
-flowchart LR
-    T[遍历温度] --> S{栈顶温度 < 当前?}
-    S -->|是| P[弹栈填天数差]
-    S -->|否| I[压入当前下标]
-    P --> S
-```
+### 动图演示
+
+![单调栈 — 每日温度](assets/gifs/03-monotonic-stack.gif)
 
 ### Go 代码
 
@@ -92,6 +88,10 @@ func dailyTemperatures(temperatures []int) []int {
 ### 思路
 
 双端队列存**下标**，保证队头最大且在下标递增前提下值递减。窗口滑出时从队头剔除过期下标。
+
+### 动图演示
+
+![单调队列 — 滑动窗口最大值](assets/gifs/03-sliding-window-max.gif)
 
 ### 推演：`nums=[1,3,-1,-3,5,3,6,7], k=3`
 

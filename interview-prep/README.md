@@ -26,11 +26,42 @@ cd interview-prep/go
 go test ./... -v
 ```
 
+## 高清动图
+
+所有算法核心思路均已制作为 **1400×750 高清逐步推演动图**（深色主题 + 中文标注），存放于 `assets/gifs/`。
+
+重新生成动图：
+
+```bash
+pip install pillow matplotlib imageio numpy
+python3 interview-prep/scripts/generate_gifs.py
+```
+
+| 动图 | 对应题目 |
+|------|----------|
+| `01-sliding-window.gif` | LC3 无重复字符最长子串 |
+| `01-three-sum.gif` | LC15 三数之和 |
+| `02-reverse-list.gif` | LC206 反转链表 |
+| `02-cycle-list.gif` | LC142 环形链表入口 |
+| `03-monotonic-stack.gif` | LC739 每日温度 |
+| `03-sliding-window-max.gif` | LC239 滑动窗口最大值 |
+| `04-longest-consecutive.gif` | LC128 最长连续序列 |
+| `05-tree-depth.gif` | LC104 二叉树最大深度 |
+| `05-lca.gif` | LC236 最近公共祖先 |
+| `06-heap-topk.gif` | LC215 第 K 大元素 |
+| `07-islands-dfs.gif` | LC200 岛屿数量 |
+| `07-topo-sort.gif` | LC207 课程表 |
+| `08-rotated-binary-search.gif` | LC33 搜索旋转排序数组 |
+| `09-kadane.gif` | LC53 最大子数组和 |
+| `10-permute.gif` | LC46 全排列 |
+| `11-union-find.gif` | LC684 冗余连接 |
+| `12-trie-insert.gif` | LC208 实现 Trie |
+
 ## 如何使用本文档
 
 1. **先读「为何产生」**：理解数据结构解决的历史/工程问题，面试时能讲清选型理由。
 2. **记「核心考点」**：每类 3～5 个模板，比刷 100 道散题更高效。
-3. **跟「图示推演」**：文档内 Mermaid 图可在 GitHub / VS Code 中渲染；逐步推演表建议手画一遍。
+3. **看「动图演示」**：逐步观察指针移动、栈变化、递归过程；建议对照推演表手画一遍。
 4. **写 Go 代码**：`go/` 目录下为可运行实现，建议先闭卷再对照。
 
 ## 高频题速查（Top 30）

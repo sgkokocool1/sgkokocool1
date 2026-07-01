@@ -27,13 +27,9 @@
 
 ## 高频题 1：岛屿数量（LeetCode 200）
 
-### 图示（网格 DFS）
+### 动图演示（网格 DFS 逐步淹没）
 
-```mermaid
-flowchart LR
-    L[陆地1] -->|四向| F[淹没标记0]
-    F --> N[继续DFS相邻陆地]
-```
+![岛屿数量 — DFS 四向搜索](assets/gifs/07-islands-dfs.gif)
 
 ### 推演：grid =
 
@@ -86,15 +82,9 @@ func numIslands(grid [][]byte) int {
 
 入度表 + 队列：入度 0 入队，消边；最终处理节点数 == n 则无环。
 
-```mermaid
-flowchart TD
-    I[统计入度] --> Q[入度0入队]
-    Q --> P[出队消边]
-    P --> Q
-    P --> C{处理数==n?}
-    C -->|是| OK[可完成]
-    C -->|否| NG[有环]
-```
+### 动图演示
+
+![拓扑排序 — 课程表 Kahn 算法](assets/gifs/07-topo-sort.gif)
 
 ### Go 代码
 

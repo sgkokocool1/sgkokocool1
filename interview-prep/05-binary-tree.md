@@ -26,13 +26,9 @@
 
 ## 高频题 1：二叉树的最大深度（LeetCode 104）
 
-```mermaid
-flowchart TB
-    R[root] --> L[left depth]
-    R --> Ri[right depth]
-    L --> M[max+1]
-    Ri --> M
-```
+### 动图演示
+
+![递归 DFS — 二叉树最大深度](assets/gifs/05-tree-depth.gif)
 
 ```go
 type TreeNode struct {
@@ -104,13 +100,9 @@ func kthSmallest(root *TreeNode, k int) int {
 - 若 `p,q` 分居左右子树，当前为 LCA
 - 若一侧为空，答案在另一侧
 
-```mermaid
-flowchart TD
-    N[node] --> L{p in left?}
-    L --> R{q in right?}
-    R -->|分居两侧| N
-    R -->|同侧| Recurse[递归该侧]
-```
+### 动图演示
+
+![最近公共祖先 — 递归分治](assets/gifs/05-lca.gif)
 
 ### Go 代码
 

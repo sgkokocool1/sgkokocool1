@@ -56,13 +56,9 @@ func twoSum(nums []int, target int) []int {
 
 `set` 存所有数；只对**序列起点**（`x-1` 不在 set）向后延伸计数。
 
-```mermaid
-flowchart TD
-    X[x in set] --> S{x-1 in set?}
-    S -->|是| Skip[跳过非起点]
-    S -->|否| Walk[x,x+1,... 计数]
-    Walk --> Max[更新 max]
-```
+### 动图演示
+
+![哈希集合 — 最长连续序列](assets/gifs/04-longest-consecutive.gif)
 
 ### Go 代码
 

@@ -53,11 +53,9 @@ func climbStairs(n int) int {
 
 `cur = max(x, cur+x)`，全局 max。
 
-```mermaid
-flowchart LR
-    X[nums_i] --> C{cur+x 还是 新开?}
-    C --> G[更新 global max]
-```
+### 动图演示
+
+![Kadane 算法 — 最大子数组和](assets/gifs/09-kadane.gif)
 
 ### 推演：`[-2,1,-3,4,-1,2,1,-5,4]`
 

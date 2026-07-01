@@ -36,17 +36,11 @@
 - 窗口不变量：窗口内无重复字符
 - 哈希表存**最后索引**而非仅 bool，避免 left 错误回退
 
-### 图示（Mermaid 状态机）
+### 动图演示（高清逐步推演）
 
-```mermaid
-stateDiagram-v2
-    [*] --> Expand: right++
-    Expand --> Shrink: 字符重复且 last>=left
-    Shrink --> Expand: left = last+1
-    Expand --> Record: 更新 maxLen
-    Record --> Expand: right < n
-    Record --> [*]: right == n
-```
+![滑动窗口 — 无重复字符最长子串](assets/gifs/01-sliding-window.gif)
+
+*分辨率 1400×750 · 每步展示 left/right 指针与窗口状态*
 
 ### 测试用例逐步推演
 
@@ -91,19 +85,9 @@ func lengthOfLongestSubstring(s string) int {
 
 排序后固定 `i`，双指针 `l,r` 在 `[i+1, n-1]` 找 `nums[l]+nums[r] == -nums[i]`。注意去重：相同值跳过。
 
-### 图示
+### 动图演示
 
-```mermaid
-flowchart LR
-    A[排序数组] --> B[固定 i]
-    B --> C{l + r 与 target}
-    C -->|太小| D[l++]
-    C -->|太大| E[r--]
-    C -->|等于| F[记录 + 去重移动 l,r]
-    D --> C
-    E --> C
-    F --> B
-```
+![三数之和 — 排序 + 双指针](assets/gifs/01-three-sum.gif)
 
 ### 推演：`nums = [-1,0,1,2,-1,-4]`
 

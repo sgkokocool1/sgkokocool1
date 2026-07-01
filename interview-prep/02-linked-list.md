@@ -30,18 +30,9 @@ Go 中：`container/list` 为双向链表；面试常自定义 `ListNode`。
 
 维护 `prev, cur, next`：`cur.Next = prev`，整体前移。
 
-### 图示
+### 动图演示
 
-```mermaid
-graph LR
-    subgraph before
-        A1[1] --> A2[2] --> A3[3] --> A4[nil]
-    end
-    subgraph after
-        B3[nil] --> B2[3] --> B1[2] --> B0[1]
-    end
-    before -.->|反转| after
-```
+![链表反转 — 三指针迭代](assets/gifs/02-reverse-list.gif)
 
 ### 逐步推演
 
@@ -84,16 +75,9 @@ func reverseList(head *ListNode) *ListNode {
 2. 设头到入口距离 a，入口到相遇点 b，环长 c：`2(a+b)=a+b+nc` → `a = nc - b`
 3. 一指针从头、一指针从相遇点同速走，相遇即入口
 
-### 图示
+### 动图演示
 
-```mermaid
-flowchart TB
-    H[head] -->|a| E[入口 entry]
-    E -->|b| M[相遇点 meet]
-    M -->|c-b| E
-    H2[指针1从head] --> E
-    M2[指针2从meet] --> E
-```
+![环形链表入口 — Floyd 双阶段算法](assets/gifs/02-cycle-list.gif)
 
 ### Go 代码
 

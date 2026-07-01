@@ -149,13 +149,4 @@ func mergeKLists(lists []*ListNode) *ListNode {
 
 ## 图示：小根堆 TopK
 
-```mermaid
-graph TB
-    subgraph 流式元素
-        E1[3] --> H
-        E2[1] --> H
-        E3[4] --> H
-        E4[2] --> H
-    end
-    H[大小K=2的小根堆] --> T[堆顶=第K大]
-```
+![小根堆 — 第 K 大元素](assets/gifs/06-heap-topk.gif)

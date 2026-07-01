@@ -16,18 +16,9 @@
 
 ---
 
-## 图示
+## 动图演示
 
-```mermaid
-graph TB
-    subgraph union前
-        A1[1] --- A2[2]
-        A3[3] --- A4[4]
-    end
-    subgraph union 2-3后
-        B1[1] --- B2[2-3-4]
-    end
-```
+![并查集 — 冗余连接检测](assets/gifs/11-union-find.gif)
 
 ---
 

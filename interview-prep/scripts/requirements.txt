@@ -1,0 +1,4 @@
+pillow>=10.0
+matplotlib>=3.8
+imageio>=2.33
+numpy>=1.26

@@ -20,17 +20,9 @@
 
 ---
 
-## 图示
+## 动图演示
 
-插入 "cat", "car"：
-
-```mermaid
-graph TD
-    R[root] --> C[c]
-    C --> A[a]
-    A --> T[t end]
-    A --> R2[r end]
-```
+![字典树 — 逐词插入过程](assets/gifs/12-trie-insert.gif)
 
 ---
 
@@ -88,16 +80,11 @@ func (t *Trie) find(s string) *Trie {
 
 Trie + 网格 DFS，回溯时剪枝删除已匹配 Trie 节点。
 
-### 思路图
+### 动图演示
 
-```mermaid
-flowchart TD
-    B[board DFS] --> T[Trie 走字符]
-    T --> E{isEnd?}
-    E -->|是| R[加入结果]
-    T --> P[四向继续]
-    P --> U[回溯撤销 visit]
-```
+Trie 插入结构见上图；网格 DFS 沿 Trie 走字符，命中 `isEnd` 时收集单词并剪枝。
+
+![字典树 — 插入结构（网格搜索共用此 Trie）](assets/gifs/12-trie-insert.gif)
 
 ### 推演要点
 

@@ -42,16 +42,9 @@ func search(nums []int, target int) int {
 
 ## 高频题 2：搜索旋转排序数组（LeetCode 33）
 
-### 图示
+### 动图演示
 
-```mermaid
-flowchart TD
-    M[mid] --> L{左半有序?}
-    L -->|是| T1{target在左区间?}
-    L -->|否| T2{target在右区间?}
-    T1 -->|是| GoLeft[right=mid-1]
-    T1 -->|否| GoRight[left=mid+1]
-```
+![二分查找 — 旋转排序数组](assets/gifs/08-rotated-binary-search.gif)
 
 ### 推演：`nums=[4,5,6,7,0,1,2], target=0`
 
