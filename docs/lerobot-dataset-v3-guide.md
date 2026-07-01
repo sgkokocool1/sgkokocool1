@@ -2,6 +2,8 @@
 
 > 基于 [Hugging Face 官方博客](https://huggingface.co/blog/lerobot-datasets-v3)、[LeRobot 官方文档](https://huggingface.co/docs/lerobot/en/lerobot-dataset-v3) 与真实数据集（如 [lerobot/aloha_static_coffee](https://huggingface.co/datasets/lerobot/aloha_static_coffee)）整理。
 
+**完整操作流程（含脚本与示例数据）** → [lerobot-workflow/README.md](./lerobot-workflow/README.md)
+
 ---
 
 ## 目录

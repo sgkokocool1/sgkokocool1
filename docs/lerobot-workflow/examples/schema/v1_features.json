@@ -1,0 +1,30 @@
+{
+  "fps": 30,
+  "robot_type": "custom_arm",
+  "features": {
+    "observation.state": {
+      "dtype": "float32",
+      "shape": [6],
+      "names": {
+        "motors": ["j1", "j2", "j3", "j4", "j5", "j6"]
+      }
+    },
+    "action": {
+      "dtype": "float32",
+      "shape": [6],
+      "names": {
+        "motors": ["j1", "j2", "j3", "j4", "j5", "j6"]
+      }
+    },
+    "observation.images.front": {
+      "dtype": "video",
+      "shape": [480, 640, 3],
+      "names": ["height", "width", "channel"]
+    },
+    "observation.images.wrist": {
+      "dtype": "video",
+      "shape": [480, 640, 3],
+      "names": ["height", "width", "channel"]
+    }
+  }
+}
