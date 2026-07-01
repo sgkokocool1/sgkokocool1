@@ -1,0 +1,9 @@
+# LeRobot 数据流水线依赖（在 robot-server 上安装）
+# pip install -r requirements.txt
+
+lerobot>=0.4.0
+pandas>=2.0
+pyarrow>=14.0
+pillow>=10.0
+h5py>=3.10
+numpy>=1.24

@@ -4,6 +4,11 @@
 - 💞️ I’m looking to collaborate on all
 - 📫 How to reach me ...
 
+## Docs
+
+- [LeRobot 数据流水线完整操作流程](docs/lerobot-workflow/README.md) — 脚本、示例数据、日常采集与构建训练
+- [LeRobotDataset v3.0 实践指南](docs/lerobot-dataset-v3-guide.md) — 格式解读与字段详解
+
 <!---
 sgkokocool1/sgkokocool1 is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 You can click the Preview link to take a look at your changes.

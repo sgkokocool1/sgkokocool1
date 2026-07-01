@@ -1,0 +1,22 @@
+{
+  "build_time": "2025-07-22T11:30:00+08:00",
+  "mode": "create",
+  "dataset_id": "local/pick-place-w2-202507",
+  "dataset_root": "/data/lerobot/pick-place-w2-202507",
+  "date_from": "2025-07-14",
+  "date_to": "2025-07-20",
+  "import_list": "/data/builds/2025-07-w2/import_list.jsonl",
+  "imported_episodes": 175,
+  "skipped_in_range": 23,
+  "skipped_reason": "success=false",
+  "total_frames": 26250,
+  "by_source": {
+    "ros": 130,
+    "sim": 40,
+    "mp4": 5
+  },
+  "by_task": {
+    "pick_red_block": 140,
+    "place_in_bin": 35
+  }
+}
