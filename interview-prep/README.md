@@ -28,14 +28,16 @@ go test ./... -v
 
 ## 高清动图
 
-所有算法核心思路均已制作为 **1400×750 高清逐步推演动图**（深色主题 + 中文标注），存放于 `assets/gifs/`。
+所有算法核心思路均已制作为 **3840×2160（4K UHD）** 逐步推演动图，默认 **2.4 秒/帧** 慢速播放，存放于 `assets/gifs/`。
 
 重新生成动图：
 
 ```bash
-pip install pillow matplotlib imageio numpy
+pip install -r interview-prep/scripts/requirements.txt
 python3 interview-prep/scripts/generate_gifs.py
 ```
+
+可在 `scripts/generate_gifs.py` 顶部调整 `FRAME_DURATION`（帧时长）和 `HOLD_STEP`（步骤停留重复帧数）。
 
 | 动图 | 对应题目 |
 |------|----------|

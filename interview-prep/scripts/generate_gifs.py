@@ -35,29 +35,48 @@ DANGER   = "#f87171"
 PURPLE   = "#a78bfa"
 HIGHLIGHT = "#f472b6"
 
-W, H = 14, 7.5
+# ── 4K 输出 & 播放速度配置 ─────────────────────────────────────────────────
+TARGET_W, TARGET_H = 3840, 2160   # 4K UHD
 DPI = 200
+W, H = TARGET_W / DPI, TARGET_H / DPI   # 19.2 × 10.8 inch → 3840×2160 px
+FONT_SCALE = TARGET_W / 1400            # 相对旧版缩放 (~2.74×)
+
+FRAME_DURATION = 2.4        # 每帧停留秒数（慢速，便于阅读）
+HOLD_STEP = 4                 # 普通步骤重复帧
+HOLD_RESULT = 6               # 关键结果步骤
+HOLD_FAST = 3                 # DFS 等细碎步骤
+HOLD_LITE = 2                 # 全排列等长动画（避免过长）
+FRAME_DURATION_LITE = 2.0     # 长动画每帧时长
+
+
+def fs(size: float) -> float:
+    """按 4K 缩放字号"""
+    return size * FONT_SCALE
+
+
+def lw(size: float) -> float:
+    """按 4K 缩放线宽"""
+    return size * FONT_SCALE
 
 
 def setup_ax(title: str, subtitle: str = ""):
-    fig, ax = plt.subplots(figsize=(W, H), facecolor=BG)
+    fig, ax = plt.subplots(figsize=(W, H), facecolor=BG, dpi=DPI)
     ax.set_facecolor(BG)
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 54)
     ax.axis("off")
-    ax.text(50, 51, title, ha="center", va="center", fontsize=18,
+    ax.text(50, 51, title, ha="center", va="center", fontsize=fs(18),
             fontweight="bold", color=TEXT, family="sans-serif")
     if subtitle:
-        ax.text(50, 47.5, subtitle, ha="center", va="center", fontsize=11,
+        ax.text(50, 47.5, subtitle, ha="center", va="center", fontsize=fs(11),
                 color=MUTED, family="sans-serif")
     return fig, ax
 
 
-def save_gif(name: str, frames: List[np.ndarray], duration: float = 1.0):
+def save_gif(name: str, frames: List[np.ndarray], duration: float = FRAME_DURATION):
     path = os.path.join(OUT_DIR, f"{name}.gif")
-    # 高清动图：逐帧优化调色板
     imageio.mimsave(path, frames, duration=duration, loop=0, palettesize=256)
-    print(f"  ✓ {path}  ({len(frames)} frames)")
+    print(f"  ✓ {path}  ({len(frames)} frames, {duration}s/frame, {TARGET_W}×{TARGET_H})")
 
 
 def fig_to_array(fig) -> np.ndarray:
@@ -68,16 +87,16 @@ def fig_to_array(fig) -> np.ndarray:
     return img
 
 
-def hold(fig, n: int = 2) -> List[np.ndarray]:
+def hold(fig, n: int = HOLD_STEP) -> List[np.ndarray]:
     arr = fig_to_array(fig)
     return [arr] * n
 
 
 def panel(ax, x, y, w, h, label: str, color=PANEL):
     p = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.3,rounding_size=1.2",
-                       facecolor=color, edgecolor="#2d3f56", linewidth=1.5, alpha=0.95)
+                       facecolor=color, edgecolor="#2d3f56", linewidth=lw(1.5), alpha=0.95)
     ax.add_patch(p)
-    ax.text(x + w / 2, y + h + 1.8, label, ha="center", fontsize=9, color=MUTED)
+    ax.text(x + w / 2, y + h + 1.8, label, ha="center", fontsize=fs(9), color=MUTED)
 
 
 def draw_array(ax, vals, y=28, highlight=None, window=None, pointers=None, title=""):
@@ -85,7 +104,7 @@ def draw_array(ax, vals, y=28, highlight=None, window=None, pointers=None, title
     bw = min(7.5, 70 / n)
     start_x = 50 - (n * bw) / 2
     if title:
-        ax.text(50, y + 12, title, ha="center", fontsize=10, color=MUTED)
+        ax.text(50, y + 12, title, ha="center", fontsize=fs(10), color=MUTED)
     for i, v in enumerate(vals):
         x = start_x + i * bw
         fc = PANEL
@@ -97,23 +116,23 @@ def draw_array(ax, vals, y=28, highlight=None, window=None, pointers=None, title
             fc = "#14532d"
             ec = SUCCESS
         rect = FancyBboxPatch((x, y), bw - 0.4, 8, boxstyle="round,pad=0.2,rounding_size=0.6",
-                              facecolor=fc, edgecolor=ec, linewidth=2)
+                              facecolor=fc, edgecolor=ec, linewidth=lw(2))
         ax.add_patch(rect)
         ax.text(x + (bw - 0.4) / 2, y + 4, str(v), ha="center", va="center",
-                fontsize=13, fontweight="bold", color=TEXT)
-        ax.text(x + (bw - 0.4) / 2, y - 3, str(i), ha="center", fontsize=9, color=MUTED)
+                fontsize=fs(13), fontweight="bold", color=TEXT)
+        ax.text(x + (bw - 0.4) / 2, y - 3, str(i), ha="center", fontsize=fs(9), color=MUTED)
     if pointers:
         for name, idx, color in pointers:
             px = start_x + idx * bw + (bw - 0.4) / 2
             ax.annotate(name, xy=(px, y + 8.2), xytext=(px, y + 11.5),
-                        ha="center", fontsize=10, fontweight="bold", color=color,
-                        arrowprops=dict(arrowstyle="->", color=color, lw=1.8))
+                        ha="center", fontsize=fs(10), fontweight="bold", color=color,
+                        arrowprops=dict(arrowstyle="->", color=color, lw=lw(1.8)))
 
 
 def status_bar(ax, lines: List[str], y=6):
     panel(ax, 4, y - 2, 92, 10, "")
     for i, line in enumerate(lines):
-        ax.text(8, y + 6 - i * 2.8, line, fontsize=10, color=TEXT, family="monospace")
+        ax.text(8, y + 6 - i * 2.8, line, fontsize=fs(10), color=TEXT)
 
 
 # ── Animations ───────────────────────────────────────────────────────────
@@ -140,7 +159,7 @@ def anim_sliding_window():
             f"窗口 [{left},{right}] = \"{''.join(s[left:right+1])}\"",
             f"maxLen = {max_len}",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("01-sliding-window", frames)
 
 
@@ -160,7 +179,7 @@ def anim_three_sum():
                 f"nums[i]+nums[l]+nums[r] = {nums[i]}+{nums[l]}+{nums[r]} = {s}",
                 action,
             ])
-            frames.extend(hold(fig, 2))
+            frames.extend(hold(fig))
             if s == 0:
                 l += 1
                 r -= 1
@@ -194,21 +213,21 @@ def anim_reverse_list():
             fc = ACCENT if i == cur else (SUCCESS if i == prev else PANEL)
             if i in highlight:
                 fc = "#7c3aed"
-            circ = Circle((x, y), 3.5, facecolor=fc, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 3.5, facecolor=fc, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, str(v), ha="center", va="center", fontsize=14,
+            ax.text(x, y, str(v), ha="center", va="center", fontsize=fs(14),
                     fontweight="bold", color=TEXT)
-            ax.text(x, y - 6, f"node{i}", ha="center", fontsize=8, color=MUTED)
+            ax.text(x, y - 6, f"node{i}", ha="center", fontsize=fs(8), color=MUTED)
             if i < len(vals) - 1:
                 tgt = rev_next.get(i, next_map.get(i, i + 1))
                 if tgt >= 0:
                     ax.annotate("", xy=(positions.get(tgt, 18 + tgt * 16) - 3.5, y),
                                 xytext=(x + 3.5, y),
-                                arrowprops=dict(arrowstyle="->", color=ACCENT2, lw=2.2))
+                                arrowprops=dict(arrowstyle="->", color=ACCENT2, lw=lw(2.2)))
         if prev_idx >= 0:
-            ax.text(18 + prev * 16, y + 8, "prev", ha="center", color=SUCCESS, fontsize=10)
+            ax.text(18 + prev * 16, y + 8, "prev", ha="center", color=SUCCESS, fontsize=fs(10))
         if cur_idx >= 0 and cur_idx < len(vals):
-            ax.text(18 + cur * 16, y + 8, "cur", ha="center", color=ACCENT, fontsize=10)
+            ax.text(18 + cur * 16, y + 8, "cur", ha="center", color=ACCENT, fontsize=fs(10))
 
     step = 0
     cur = 0
@@ -221,7 +240,7 @@ def anim_reverse_list():
             f"step {step+1}: cur=node{cur}({vals[cur]}), prev={'nil' if prev<0 else f'node{prev}'}",
             f"执行: node{cur}.Next → {'nil' if prev<0 else f'node{prev}'}",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         rev_next[cur] = prev
         prev = cur
         cur = nxt if nxt >= 0 else len(vals)
@@ -232,15 +251,15 @@ def anim_reverse_list():
     order = list(reversed(range(len(vals))))
     for j, i in enumerate(order):
         x = 18 + j * 16
-        circ = Circle((x, y), 3.5, facecolor=SUCCESS, edgecolor=TEXT, linewidth=2)
+        circ = Circle((x, y), 3.5, facecolor=SUCCESS, edgecolor=TEXT, linewidth=lw(2))
         ax.add_patch(circ)
-        ax.text(x, y, str(vals[i]), ha="center", va="center", fontsize=14,
+        ax.text(x, y, str(vals[i]), ha="center", va="center", fontsize=fs(14),
                 fontweight="bold", color=TEXT)
         if j < len(order) - 1:
             ax.annotate("", xy=(x + 16 - 3.5, y), xytext=(x + 3.5, y),
-                        arrowprops=dict(arrowstyle="->", color=SUCCESS, lw=2.5))
+                        arrowprops=dict(arrowstyle="->", color=SUCCESS, lw=lw(2.5)))
     status_bar(ax, ["结果: 4 → 3 → 2 → 1"])
-    frames.extend(hold(fig, 3))
+    frames.extend(hold(fig, HOLD_RESULT))
     save_gif("02-reverse-list", frames)
 
 
@@ -260,16 +279,16 @@ def anim_cycle_list():
                 fc = WARN
             if i == fast:
                 fc = DANGER
-            circ = Circle((x, y), 4, facecolor=fc, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 4, facecolor=fc, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, v, ha="center", va="center", fontsize=13,
+            ax.text(x, y, v, ha="center", va="center", fontsize=fs(13),
                     fontweight="bold", color=TEXT)
             ni = next_idx[i]
             ax.annotate("", xy=(xs[ni] - 4, y), xytext=(x + 4, y),
-                        arrowprops=dict(arrowstyle="->", color=ACCENT2, lw=2))
+                        arrowprops=dict(arrowstyle="->", color=ACCENT2, lw=lw(2)))
         # cycle arc
         ax.annotate("", xy=(35, 26), xytext=(75, 26),
-                    arrowprops=dict(arrowstyle="->", color=PURPLE, lw=1.5,
+                    arrowprops=dict(arrowstyle="->", color=PURPLE, lw=lw(1.5),
                                     connectionstyle="arc3,rad=-0.4"))
         labels = ["阶段: 快慢指针寻找相遇点", f"slow=node{slow}  fast=node{fast}", extra_line]
         if phase == 2:
@@ -281,7 +300,7 @@ def anim_cycle_list():
     for _ in range(6):
         fig, ax = setup_ax("环形链表入口 · Floyd 算法 (LC142)", "快指针 2 步，慢指针 1 步")
         draw_cycle(ax, slow, fast, 1)
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         slow = next_idx[slow]
         fast = next_idx[next_idx[fast]]
         step += 1
@@ -293,11 +312,11 @@ def anim_cycle_list():
     for _ in range(4):
         fig, ax = setup_ax("环形链表入口 · 第二阶段", "head 与 meet 同速 → 入口")
         draw_cycle(ax, p1, p2, 2, f"ptr1=node{p1}  ptr2=node{p2}")
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         if p1 == p2:
             fig2, ax2 = setup_ax("找到入口!", f"入口 = node{p1} (值 {nodes[p1]})")
             draw_cycle(ax2, p1, p1, 2, "✓ 相遇于环入口")
-            frames.extend(hold(fig2, 3))
+            frames.extend(hold(fig2, HOLD_RESULT))
             break
         p1 = next_idx[p1]
         p2 = next_idx[p2]
@@ -317,14 +336,14 @@ def anim_monotonic_stack():
         panel(ax, 72, 14, 24, 22, "单调栈 (下标)")
         for j, idx in enumerate(reversed(stack[-5:])):
             ax.text(84, 32 - j * 4, f"[{idx}] T={temps[idx]}", ha="center",
-                    fontsize=9, color=TEXT, family="monospace")
+                    fontsize=fs(9), color=TEXT)
         popping = [j for j in stack if temps[i] > temps[j]]
         status_bar(ax, [
             f"day {i}: T={t}",
             f"弹栈: {popping if popping else '无'} → 填 ans = i-j",
             f"压入 {i}",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         while stack and temps[i] > temps[stack[-1]]:
             j = stack.pop()
             ans[j] = i - j
@@ -349,12 +368,12 @@ def anim_sliding_max():
                        pointers=[("i", i, ACCENT2)])
             panel(ax, 4, 14, 40, 12, "双端队列 (存下标, 值递减)")
             dq_str = " ← ".join(f"[{j}]={nums[j]}" for j in deque)
-            ax.text(24, 20, dq_str or "空", ha="center", fontsize=9, color=TEXT)
+            ax.text(24, 20, dq_str or "空", ha="center", fontsize=fs(9), color=TEXT)
             status_bar(ax, [
                 f"窗口 [{i-k+1},{i}]",
                 f"队头下标 {deque[0]} → max = {nums[deque[0]]}",
             ])
-            frames.extend(hold(fig, 2))
+            frames.extend(hold(fig))
     save_gif("03-sliding-window-max", frames)
 
 
@@ -376,7 +395,7 @@ def anim_hash_consecutive():
             f"起点 {x}，延伸: {' → '.join(map(str, seq))}",
             f"长度 = {length}",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("04-longest-consecutive", frames)
 
 
@@ -408,15 +427,15 @@ def anim_lca():
             x, y = pos[node]
             for child in (l, r):
                 cx, cy = pos[child]
-                ax.plot([x, cx], [y - 2, cy + 2], color="#3d5270", lw=2)
+                ax.plot([x, cx], [y - 2, cy + 2], color="#3d5270", lw=lw(2))
         for node, (x, y) in pos.items():
             fc = ACCENT if node == ans else (WARN if node in (p, q) else PANEL)
-            circ = Circle((x, y), 3.2, facecolor=fc, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 3.2, facecolor=fc, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, str(node), ha="center", va="center", fontsize=11,
+            ax.text(x, y, str(node), ha="center", va="center", fontsize=fs(11),
                     fontweight="bold", color=TEXT)
         status_bar(ax, [desc, f"LCA = node {ans}"])
-        frames.extend(hold(fig, 3))
+        frames.extend(hold(fig, HOLD_RESULT))
     save_gif("05-lca", frames)
 
 
@@ -439,17 +458,17 @@ def anim_heap_topk():
         for j, v in enumerate(sorted_h):
             y = 34 - j * 5
             circ = Circle((50, y), 3, facecolor=ACCENT if j == 0 else PANEL,
-                          edgecolor=TEXT, linewidth=2)
+                          edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(50, y, str(v), ha="center", va="center", fontsize=12,
+            ax.text(50, y, str(v), ha="center", va="center", fontsize=fs(12),
                     fontweight="bold", color=TEXT)
             if j == 0:
-                ax.text(58, y, "← 堆顶(第K大)", fontsize=9, color=WARN)
+                ax.text(58, y, "← 堆顶(第K大)", fontsize=fs(9), color=WARN)
         status_bar(ax, [
             f"插入 {x}" + (f", 弹出 {removed}" if removed is not None else ""),
             f"堆: {sorted_h}",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("06-heap-topk", frames)
 
 
@@ -475,10 +494,10 @@ def anim_islands():
                 if (r, c) in highlight:
                     fc = ACCENT2
                 rect = FancyBboxPatch((x, y), 11, 9, boxstyle="round,pad=0.2,rounding_size=0.5",
-                                      facecolor=fc, edgecolor="#3d5270", linewidth=2)
+                                      facecolor=fc, edgecolor="#3d5270", linewidth=lw(2))
                 ax.add_patch(rect)
                 ax.text(x + 5.5, y + 4.5, ch, ha="center", va="center",
-                        fontsize=16, fontweight="bold", color=TEXT)
+                        fontsize=fs(16), fontweight="bold", color=TEXT)
 
     for r in range(rows):
         for c in range(cols):
@@ -499,7 +518,7 @@ def anim_islands():
                         f"DFS step {step+1}: 淹没 ({cr},{cc})",
                         f"岛屿计数 = {count}",
                     ])
-                    frames.extend(hold(fig, 1))
+                    frames.extend(hold(fig, HOLD_FAST))
                     step += 1
                     for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                         stack.append((cr + dr, cc + dc))
@@ -528,19 +547,19 @@ def anim_topo():
             x1, y1 = pos[b]
             x2, y2 = pos[a]
             ax.annotate("", xy=(x2, y2 + 3), xytext=(x1, y1 - 3),
-                        arrowprops=dict(arrowstyle="->", color="#3d5270", lw=2))
+                        arrowprops=dict(arrowstyle="->", color="#3d5270", lw=lw(2)))
         for node, (x, y) in pos.items():
             fc = SUCCESS if node == u else (PANEL if indeg[node] > 0 else WARN)
-            circ = Circle((x, y), 4, facecolor=fc, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 4, facecolor=fc, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, str(node), ha="center", va="center", fontsize=12,
+            ax.text(x, y, str(node), ha="center", va="center", fontsize=fs(12),
                     fontweight="bold", color=TEXT)
-            ax.text(x, y - 7, f"in={indeg[node]}", ha="center", fontsize=8, color=MUTED)
+            ax.text(x, y - 7, f"in={indeg[node]}", ha="center", fontsize=fs(8), color=MUTED)
         status_bar(ax, [
             f"出队 course {u}",
             f"已处理 {seen}/{n} 门课",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         for v in adj[u]:
             indeg[v] -= 1
             if indeg[v] == 0:
@@ -568,7 +587,7 @@ def anim_rotated_search():
         else:
             action = "右半有序; 相应收缩"
         status_bar(ax, [f"mid={mid}, nums[mid]={nums[mid]}", action])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
         if nums[mid] == target:
             break
         if ordered_left:
@@ -608,7 +627,7 @@ def anim_kadane():
             f"cur={cur}, best={best}",
             f"最优区间 [{best_range[0]},{best_range[1]}]",
         ])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("09-kadane", frames)
 
 
@@ -622,10 +641,10 @@ def anim_permute():
         fig, ax = setup_ax("回溯 · 全排列 (LC46)", action)
         panel(ax, 8, 22, 35, 16, "决策树 path")
         ax.text(25, 30, " → ".join(map(str, path)) if path else "[]",
-                ha="center", fontsize=14, color=ACCENT2, fontweight="bold")
+                ha="center", fontsize=fs(14), color=ACCENT2, fontweight="bold")
         draw_array(ax, nums, y=10, highlight=set(i for i, u in enumerate(used) if u))
         status_bar(ax, [action, f"depth={len(path)}/3"])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig, HOLD_LITE))
 
     def dfs():
         if len(path) == 3:
@@ -643,7 +662,7 @@ def anim_permute():
             capture(f"撤销 nums[{i}]")
 
     dfs()
-    save_gif("10-permute", frames)
+    save_gif("10-permute", frames, duration=FRAME_DURATION_LITE)
 
 
 def anim_union_find():
@@ -657,14 +676,14 @@ def anim_union_find():
             if parent[a] == parent[b] or (a, b) == highlight_edge or (b, a) == highlight_edge:
                 x1, y1 = pos[a]
                 x2, y2 = pos[b]
-                ax.plot([x1, x2], [y1, y2], color=ACCENT2, lw=2, alpha=0.6)
+                ax.plot([x1, x2], [y1, y2], color=ACCENT2, lw=lw(2), alpha=0.6)
         for node, (x, y) in pos.items():
             root = parent[node]
-            circ = Circle((x, y), 4, facecolor=PANEL, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 4, facecolor=PANEL, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, str(node), ha="center", va="center", fontsize=13,
+            ax.text(x, y, str(node), ha="center", va="center", fontsize=fs(13),
                     fontweight="bold", color=TEXT)
-            ax.text(x, y - 7, f"root={root}", ha="center", fontsize=8, color=MUTED)
+            ax.text(x, y - 7, f"root={root}", ha="center", fontsize=fs(8), color=MUTED)
 
     def find(x):
         while parent[x] != x:
@@ -679,12 +698,12 @@ def anim_union_find():
         draw_uf((a, b))
         if ra == rb:
             status_bar(ax, [f"Find({a})={ra}, Find({b})={rb}", f"⚠ 同集! 冗余边 [{a},{b}]"])
-            frames.extend(hold(fig, 3))
+            frames.extend(hold(fig, HOLD_RESULT))
             break
         else:
             parent[rb] = ra
             status_bar(ax, [f"Union({a},{b})", f"parent[{b}]={ra}"])
-            frames.extend(hold(fig, 2))
+            frames.extend(hold(fig))
     save_gif("11-union-find", frames)
 
 
@@ -703,7 +722,7 @@ def anim_trie():
         fig, ax = setup_ax("字典树 Trie · 插入过程 (LC208)", f'插入 "{w}"')
         # draw trie tree
         y = 40
-        ax.text(15, y, "root", fontsize=11, color=TEXT,
+        ax.text(15, y, "root", fontsize=fs(11), color=TEXT,
                 bbox=dict(boxstyle="round", facecolor=PANEL, edgecolor=ACCENT))
         # BFS layout
         positions = {"": (15, y)}
@@ -722,16 +741,16 @@ def anim_trie():
                     drawn.add(prefix + ch)
                     end = "#" in t[ch]
                     fc = SUCCESS if end else PANEL
-                    ax.text(px, py, ch + ("*" if end else ""), fontsize=10, color=TEXT,
+                    ax.text(px, py, ch + ("*" if end else ""), fontsize=fs(10), color=TEXT,
                             bbox=dict(boxstyle="round", facecolor=fc, edgecolor=ACCENT2))
                     if depth > 0:
                         ax.annotate("", xy=(px - 2, py + 1), xytext=(px - 18, py + 10),
-                                    arrowprops=dict(arrowstyle="->", color="#3d5270", lw=1.2))
+                                    arrowprops=dict(arrowstyle="->", color="#3d5270", lw=lw(1.2)))
                     draw_trie(t[ch], prefix + ch, depth + 1, i)
 
         draw_trie(trie, "", 0, 0)
         status_bar(ax, [f'完成插入 "{w}"', "带 * 为单词结尾"])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("12-trie-insert", frames)
 
 
@@ -753,15 +772,15 @@ def anim_tree_depth():
         for a, b in edges:
             x1, y1 = pos[a]
             x2, y2 = pos[b]
-            ax.plot([x1, x2], [y1 - 2, y2 + 2], color="#3d5270", lw=2.5)
+            ax.plot([x1, x2], [y1 - 2, y2 + 2], color="#3d5270", lw=lw(2.5))
         for n, (x, y) in pos.items():
             fc = ACCENT if n == node else PANEL
-            circ = Circle((x, y), 3.5, facecolor=fc, edgecolor=TEXT, linewidth=2)
+            circ = Circle((x, y), 3.5, facecolor=fc, edgecolor=TEXT, linewidth=lw(2))
             ax.add_patch(circ)
-            ax.text(x, y, str(n), ha="center", va="center", fontsize=12,
+            ax.text(x, y, str(n), ha="center", va="center", fontsize=fs(12),
                     fontweight="bold", color=TEXT)
         status_bar(ax, [msg, "maxDepth = 3"])
-        frames.extend(hold(fig, 2))
+        frames.extend(hold(fig))
     save_gif("05-tree-depth", frames)
 
 
