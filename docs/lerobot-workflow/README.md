@@ -426,6 +426,7 @@ DATA_ROOT=/data /data/scripts/weekly_qc.sh
 
 - [LeRobotDataset v3.0 实践指南（理论详解）](../lerobot-dataset-v3-guide.md)
 - [数据统计大看板设计方案](./data-dashboard-design.md)
+- [数据统计大看板代码框架](../../robot-data-dashboard/README.md)
 - [飞书粘贴版手册](./飞书文档-LeRobot数据流水线.md)
 - [Hugging Face 官方博客](https://huggingface.co/blog/lerobot-datasets-v3)
 - [LeRobot 官方文档](https://huggingface.co/docs/lerobot/en/lerobot-dataset-v3)

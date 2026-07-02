@@ -55,3 +55,9 @@ done
 
 rm -rf "${STAGING:?}"/*
 echo "[$DATE] ingest done → $RAW"
+
+# 同步统计大看板（若已部署 robot-data-dashboard）
+SYNC_SCRIPT="${DATA_ROOT}/dashboard/api/scripts/sync_stats_db.py"
+if [[ -f "$SYNC_SCRIPT" ]]; then
+  python3 "$SYNC_SCRIPT" --data-root "$DATA_ROOT" --event ingest --job-type daily_ingest || true
+fi
