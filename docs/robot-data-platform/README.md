@@ -4,7 +4,8 @@
 
 | 文档 | 内容 |
 |------|------|
-| [DESIGN.md](./DESIGN.md) | **主设计文档**（架构、TiDB 表、ES、检索、ER、展示） |
+| [DESIGN.md](./DESIGN.md) | **主设计文档**（Markdown 权威版） |
+| [飞书文档-机器人数据平台设计.md](./飞书文档-机器人数据平台设计.md) | **飞书粘贴版**（全选复制到飞书） |
 | [appendix-ddl.sql](./appendix-ddl.sql) | TiDB 建表 SQL |
 | [appendix-es-mapping/](./appendix-es-mapping/) | Elasticsearch Mapping JSON |
 | [appendix-tag-tree.yaml](./appendix-tag-tree.yaml) | 标签树配置（不进数据库） |
