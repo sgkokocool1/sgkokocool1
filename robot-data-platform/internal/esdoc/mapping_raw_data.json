@@ -1,0 +1,80 @@
+{
+  "settings": {
+    "number_of_shards": 3,
+    "number_of_replicas": 1,
+    "refresh_interval": "5s",
+    "analysis": {
+      "analyzer": {
+        "tag_text_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "cjk_width"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "raw_data_id": { "type": "long" },
+      "uuid": { "type": "keyword" },
+      "code": { "type": "keyword" },
+      "data_type": { "type": "keyword" },
+      "source_type": { "type": "keyword" },
+      "status": { "type": "keyword" },
+      "name": {
+        "type": "text",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+      },
+      "description": { "type": "text", "analyzer": "tag_text_analyzer" },
+      "task_name": { "type": "keyword" },
+      "scene_code": { "type": "keyword" },
+      "robot_id": { "type": "keyword" },
+      "operator_id": { "type": "keyword" },
+      "session_key": { "type": "keyword" },
+      "episode_name": { "type": "keyword" },
+      "storage_path": { "type": "keyword", "index": false },
+      "metadata_uri": { "type": "keyword", "index": false },
+      "manifest_ref": { "type": "keyword" },
+      "checksum": { "type": "keyword" },
+      "file_count": { "type": "integer" },
+      "total_bytes": { "type": "long" },
+      "total_frames": { "type": "integer" },
+      "duration_sec": { "type": "double" },
+      "fps": { "type": "float" },
+      "success_flag": { "type": "boolean" },
+      "tags": {
+        "type": "nested",
+        "properties": {
+          "id": { "type": "long" },
+          "code": { "type": "keyword" },
+          "name": {
+            "type": "text",
+            "fields": { "keyword": { "type": "keyword" } }
+          },
+          "path": { "type": "keyword" },
+          "full_name": { "type": "text" },
+          "level": { "type": "short" },
+          "domain": { "type": "keyword" },
+          "source": { "type": "keyword" },
+          "confidence": { "type": "float" }
+        }
+      },
+      "tag_ids": { "type": "long" },
+      "tag_paths": { "type": "keyword" },
+      "tag_codes": { "type": "keyword" },
+      "tag_names": {
+        "type": "text",
+        "fields": { "keyword": { "type": "keyword" } }
+      },
+      "tag_text": { "type": "text", "analyzer": "tag_text_analyzer" },
+      "collected_at": { "type": "date" },
+      "detected_at": { "type": "date" },
+      "cleaned_at": { "type": "date" },
+      "preprocessed_at": { "type": "date" },
+      "created_at": { "type": "date" },
+      "updated_at": { "type": "date" },
+      "sync_version": { "type": "long" }
+    }
+  }
+}

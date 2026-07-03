@@ -10,6 +10,7 @@
 - [LeRobot 数据流水线（飞书粘贴版）](docs/lerobot-workflow/飞书文档-LeRobot数据流水线.md) — 可直接复制到飞书文档
 - [数据统计大看板设计方案](docs/lerobot-workflow/data-dashboard-design.md) — 前端 UI + 数据库统计方案
 - [数据统计大看板代码框架](robot-data-dashboard/README.md) — FastAPI + React 可运行骨架
+- [原始数据 & 资产数据表设计（GORM + ES）](robot-data-platform/docs/raw-asset-es-design.md) — 状态机、树状标签、检索方案
 - [LeRobotDataset v3.0 实践指南](docs/lerobot-dataset-v3-guide.md) — 格式解读与字段详解
 
 <!---
