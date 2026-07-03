@@ -2,19 +2,6 @@ package esdoc
 
 import "time"
 
-// TagRef ES 内嵌标签（冗余树信息，避免查询时再 join PG）
-type TagRef struct {
-	ID       uint64  `json:"id"`
-	Code     string  `json:"code"`
-	Name     string  `json:"name"`
-	Path     string  `json:"path"`      // /scene/indoor/kitchen
-	FullName string  `json:"full_name"` // 场景/室内/厨房
-	Level    int16   `json:"level"`
-	Domain   string  `json:"domain"` // raw | asset
-	Source   string  `json:"source"` // auto | manual | rule
-	Confidence float32 `json:"confidence,omitempty"`
-}
-
 // RawDataRecord 原始数据 ES 文档（索引：raw_data_records）
 // _id 建议使用 UUID，与 PG raw_data.uuid 一致
 type RawDataRecord struct {
@@ -52,15 +39,8 @@ type RawDataRecord struct {
 	FPS         float32 `json:"fps"`
 	SuccessFlag *bool   `json:"success_flag,omitempty"`
 
-	// --- 树状标签（检索核心） ---
-	Tags []TagRef `json:"tags"` // nested 存储
-
-	// 扁平化字段（高性能过滤，避免 nested 聚合开销）
-	TagIDs    []uint64 `json:"tag_ids"`    // terms 精确匹配
-	TagPaths  []string `json:"tag_paths"`  // prefix 子树检索 key
-	TagCodes  []string `json:"tag_codes"`  // keyword
-	TagNames  []string `json:"tag_names"`  // 中文名 terms
-	TagText   string   `json:"tag_text"`   // 所有标签名拼接，match 模糊搜
+	// 标签：仅存绑定叶子的 path，如 scene/indoor/kitchen
+	TagPaths []string `json:"tag_paths"`
 
 	// 时间
 	CollectedAt    *time.Time `json:"collected_at,omitempty"`
@@ -103,12 +83,7 @@ type AssetDataRecord struct {
 	SourceRawDataIDs   []uint64 `json:"source_raw_data_ids"`
 	SourceRawDataUUIDs []string `json:"source_raw_data_uuids"`
 
-	Tags     []TagRef `json:"tags"`
-	TagIDs   []uint64 `json:"tag_ids"`
 	TagPaths []string `json:"tag_paths"`
-	TagCodes []string `json:"tag_codes"`
-	TagNames []string `json:"tag_names"`
-	TagText  string   `json:"tag_text"`
 
 	AuditorID     string     `json:"auditor_id,omitempty"`
 	AuditScore    *float32   `json:"audit_score,omitempty"`

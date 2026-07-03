@@ -20,7 +20,7 @@
               合成 ──► success / failure          ──► asset_data_records
               打标 ──► 资产标签                          (资产标签 tags)
 
-tag_node (树) ◄── raw_data_tag / asset_data_tag ──► 冗余 path 到 ES
+tag_node (树) ◄── raw_data_tag / asset_data_tag ──► ES 仅存 tag_paths
 ```
 
 **原则：**
@@ -164,48 +164,75 @@ GORM 定义见 `internal/model/raw_asset.go`。
 
 ---
 
-## 5. 树状标签设计
+## 5. 树状标签设计（精简版）
 
-### 5.1 `tag_node` 标签树表（PostgreSQL 权威）
+### 5.1 查询语义
+
+| 层级 | 逻辑 | 说明 |
+|------|------|------|
+| **不同大类（category）** | **OR** | 满足任一大类条件即可 |
+| **同一大类内多选** | **AND** | 必须同时包含该大类下所有选中标签 |
+
+示例：筛选 `scene` 下「厨房 + 桌A」，或 `task` 下「抓红块」：
+
+```json
+{
+  "bool": {
+    "should": [
+      { "bool": { "must": [
+        { "term": { "tag_paths": "scene/indoor/kitchen" } },
+        { "term": { "tag_paths": "scene/indoor/table_a" } }
+      ]}},
+      { "bool": { "must": [
+        { "term": { "tag_paths": "task/pick_red_block" } }
+      ]}}
+    ],
+    "minimum_should_match": 1
+  }
+}
+```
+
+Go 构建：`esdoc.BuildTagQuery(esdoc.TagFilter{"scene": {...}, "task": {...}})`
+
+### 5.2 `tag_node` 标签树表（PostgreSQL 权威）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | uint64 | PK |
 | `parent_id` | uint64 NULL | 父节点，NULL=根 |
 | `domain` | varchar(16) | **`raw`** 场景标签 / **`asset`** 资产标签 |
-| `code` | varchar(128) | 节点编码 `kitchen` |
+| `category` | varchar(64) | **大类**，与 path 首段一致，如 `scene` / `task` |
+| `path` | varchar(1024) UNIQUE | **物化路径** `scene/indoor/kitchen`（无 leading `/`） |
 | `name` | varchar(256) | 显示名 `厨房` |
-| `level` | int16 | 层级深度 |
-| `path` | varchar(1024) UNIQUE | **物化路径** `/scene/indoor/kitchen` |
-| `full_name` | varchar(512) | `场景/室内/厨房` |
-| `sort_order` | int32 | 同级排序 |
 | `is_leaf` | bool | 是否可绑定 |
 | `is_active` | bool | 是否启用 |
 
-**树示例（domain=raw 场景标签）：**
+**已去掉的冗余字段：** `code`（并入 path）、`level`（由 path 深度推导）、`full_name`、`sort_order`、`extra`
+
+**树示例（domain=raw）：**
 
 ```
-/scene                    level=0  场景
-/scene/indoor             level=1  室内
-/scene/indoor/kitchen     level=2  厨房        ← 叶子，可绑定
-/scene/outdoor            level=1  室外
-/task                     level=0  任务
-/task/pick_red_block      level=1  抓红块
-/quality                  level=0  质量
-/quality/high             level=1  高质量
+scene                     category=scene
+scene/indoor              室内
+scene/indoor/kitchen      厨房        ← 叶子，可绑定
+scene/outdoor             室外
+task                      category=task
+task/pick_red_block       抓红块
+quality                   category=quality
+quality/high              高质量
 ```
 
-**树示例（domain=asset 资产标签）：**
+**树示例（domain=asset）：**
 
 ```
-/dataset                  level=0  数据集用途
-/dataset/train            level=1  训练集
-/dataset/eval             level=1  评测集
-/experiment               level=0  实验
-/experiment/exp-2025-w28    level=1  第28周实验
+dataset                   category=dataset
+dataset/train             训练集
+dataset/eval              评测集
+experiment                category=experiment
+experiment/exp-2025-w28   第28周实验
 ```
 
-### 5.2 绑定表
+### 5.3 绑定表
 
 | 表 | 字段 | 说明 |
 |----|------|------|
@@ -213,6 +240,8 @@ GORM 定义见 `internal/model/raw_asset.go`。
 | `asset_data_tag` | asset_data_id, tag_id, source, confidence | 资产绑资产标签 |
 
 `source`: `auto` 自动打标 / `manual` 人工 / `rule` 规则引擎
+
+绑定信息（source、confidence）仅存 PG，**不同步到 ES**。
 
 ---
 
@@ -230,77 +259,55 @@ Mapping 文件：
 - `internal/esdoc/mapping_raw_data.json`
 - `internal/esdoc/mapping_asset_data.json`
 
-### 6.2 RawDataRecord 核心字段
+### 6.2 标签字段：仅 `tag_paths`
+
+ES 中**只存一个标签字段** `tag_paths`（keyword 数组），值为绑定叶子的 path：
 
 ```json
 {
   "raw_data_id": 10001,
   "uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "data_type": "episode_dir",
-  "source_type": "collected",
   "status": "finished",
   "name": "pick episode 007",
-  "storage_path": "/data/raw/2025-07-16/.../episode_007",
-  "metadata_uri": "/data/raw/.../episode_meta.json",
   "manifest_ref": "2025-07-16/am_real_001/episode_007",
-  "tags": [
-    {
-      "id": 12,
-      "code": "kitchen",
-      "name": "厨房",
-      "path": "/scene/indoor/kitchen",
-      "full_name": "场景/室内/厨房",
-      "level": 2,
-      "domain": "raw",
-      "source": "auto",
-      "confidence": 0.95
-    }
+  "tag_paths": [
+    "scene/indoor/kitchen",
+    "task/pick_red_block"
   ],
-  "tag_ids": [12, 25],
-  "tag_paths": ["/scene", "/scene/indoor", "/scene/indoor/kitchen", "/task/pick_red_block"],
-  "tag_codes": ["kitchen", "pick_red_block"],
-  "tag_names": ["厨房", "抓红块"],
-  "tag_text": "厨房 抓红块",
   "sync_version": 3
 }
 ```
 
-### 6.3 AssetDataRecord 核心字段
+**已去掉的 ES 冗余字段：** `tags`(nested)、`tag_ids`、`tag_codes`、`tag_names`、`tag_text`、祖先 path 冗余
+
+### 6.3 AssetDataRecord 示例
 
 ```json
 {
   "asset_data_id": 2001,
-  "uuid": "...",
   "asset_type": "lerobot_dataset",
   "status": "success",
   "dataset_id": "local/pick-place-w2-202507",
-  "storage_path": "/data/lerobot/pick-place-w2-202507",
-  "episode_count": 175,
-  "frame_count": 26250,
   "source_raw_data_ids": [10001, 10002],
-  "source_raw_data_uuids": ["...", "..."],
-  "tags": [ { "path": "/dataset/train", "name": "训练集", "domain": "asset" } ],
-  "tag_paths": ["/dataset", "/dataset/train", "/experiment/exp-2025-w28"]
+  "tag_paths": ["dataset/train", "experiment/exp-2025-w28"]
 }
 ```
 
-### 6.4 为何同时存 `tags`(nested) 与 `tag_paths`(keyword)？
+### 6.4 子树检索
 
-| 字段 | 用途 | 查询类型 |
-|------|------|----------|
-| `tags` nested | 精确多条件、confidence、source 过滤 | nested query |
-| `tag_paths` keyword | **子树检索** prefix | `prefix: /scene/indoor` 命中所有子孙 |
-| `tag_ids` | 精确 ID 列表 | terms query，最快 |
-| `tag_text` | 用户模糊搜索 | match |
-| `tag_names` | 中文标签名 | terms / match |
+选树节点 `scene/indoor` 时，用 prefix 命中其下所有叶子：
 
-写入时 `BuildRawDataRecord` 会把**所有祖先 path** 冗余进 `tag_paths`，使 prefix 查询无需递归 PG。
+```json
+{ "prefix": { "tag_paths": "scene/indoor/" } }
+```
+
+尾斜杠避免 `scene/indoor` 误匹配 `scene/indoor2`。Go：`esdoc.BuildTagSubtreeQueryWithSlash("scene/indoor")`
 
 ---
 
 ## 7. 检索设计
 
-### 7.1 看板聚合（优先 filter + aggs，不走 nested）
+### 7.1 看板聚合
 
 ```json
 GET raw_data_records/_search
@@ -310,44 +317,27 @@ GET raw_data_records/_search
     "by_source_type": { "terms": { "field": "source_type" } },
     "by_data_type": { "terms": { "field": "data_type" } },
     "by_status": { "terms": { "field": "status" } },
-    "success_flag": { "terms": { "field": "success_flag" } }
+    "top_tag_paths": { "terms": { "field": "tag_paths", "size": 50 } }
   }
 }
 ```
 
-### 7.2 树状标签：查某节点下所有数据
+### 7.2 大类 OR + 同大类 AND
 
-```json
-{ "prefix": { "tag_paths": "/scene/indoor/kitchen" } }
-```
+见 §5.1，使用 `BuildTagQuery`。
 
-命中绑定了 `/scene/indoor/kitchen` 或其子标签 `/scene/indoor/kitchen/table_a` 的数据。
-
-### 7.3 多标签 AND
-
-```json
-{
-  "bool": {
-    "must": [
-      { "nested": { "path": "tags", "query": { "term": { "tags.path": "/task/pick_red_block" } } } },
-      { "nested": { "path": "tags", "query": { "term": { "tags.path": "/quality/high" } } } }
-    ]
-  }
-}
-```
-
-### 7.4 资产反查来源 raw
+### 7.3 资产反查来源 raw
 
 ```json
 { "term": { "source_raw_data_ids": 10001 } }
 ```
 
-### 7.5 列表页：PG + ES 分工
+### 7.4 列表页：PG + ES 分工
 
 | 场景 | 用谁 |
 |------|------|
 | 主键/详情/状态变更 | PostgreSQL |
-| 标签树浏览、全文搜、复杂过滤 | Elasticsearch |
+| 标签树浏览、复杂过滤 | Elasticsearch |
 | 事务写入 | PG → Outbox → ES |
 
 ---
@@ -366,8 +356,7 @@ GET raw_data_records/_search
 |------|------|------|
 | `refresh_interval` | 5s | 看板近实时，非秒级强一致 |
 | `number_of_shards` | raw:3, asset:2 | 按数据量调整 |
-| nested `tags` | 仅精确查询用 | nested 贵，聚合用扁平 `tag_codes` |
-| `tag_paths` 冗余祖先 | 写入时计算 | 避免查询时递归 |
+| `tag_paths` keyword | 唯一标签字段 | term 精确 + prefix 子树，无 nested 开销 |
 | Bulk 写入 | 500 条/批 | Outbox 消费者 bulk index |
 | `_id` = uuid | 幂等 upsert | 重试安全 |
 
@@ -418,7 +407,7 @@ robot-data-platform/
 │       ├── builder.go        # PG → ES 文档构建
 │       ├── mapping_raw_data.json
 │       ├── mapping_asset_data.json
-│       └── queries.go        # DSL 示例
+│       └── queries.go        # BuildTagQuery OR/AND 查询构建
 └── docs/
     └── raw-asset-es-design.md  # 本文档
 ```

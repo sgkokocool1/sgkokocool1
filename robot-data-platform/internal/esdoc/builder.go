@@ -1,13 +1,11 @@
 package esdoc
 
 import (
-	"strings"
-
 	"github.com/sgkokocool1/sgkokocool1/robot-data-platform/internal/model"
 )
 
 // BuildRawDataRecord 从 PG 模型构建 ES 文档（写入前调用）
-func BuildRawDataRecord(raw model.RawData, tags []model.TagNode, binds map[uint64]model.RawDataTag) RawDataRecord {
+func BuildRawDataRecord(raw model.RawData, tags []model.TagNode, _ map[uint64]model.RawDataTag) RawDataRecord {
 	doc := RawDataRecord{
 		RawDataID:      raw.ID,
 		UUID:           raw.UUID,
@@ -42,27 +40,9 @@ func BuildRawDataRecord(raw model.RawData, tags []model.TagNode, binds map[uint6
 		SyncVersion:    raw.ESSyncVersion,
 	}
 
-	var names []string
 	for _, t := range tags {
-		bind := binds[t.ID]
-		doc.Tags = append(doc.Tags, TagRef{
-			ID:         t.ID,
-			Code:       t.Code,
-			Name:       t.Name,
-			Path:       t.Path,
-			FullName:   t.FullName,
-			Level:      t.Level,
-			Domain:     string(t.Domain),
-			Source:     string(bind.Source),
-			Confidence: bind.Confidence,
-		})
-		doc.TagIDs = append(doc.TagIDs, t.ID)
-		doc.TagPaths = appendAncestorPaths([]string{t.Path}, t.Path)
-		doc.TagCodes = append(doc.TagCodes, t.Code)
-		doc.TagNames = append(doc.TagNames, t.Name)
-		names = append(names, t.Name)
+		doc.TagPaths = appendUniquePath(doc.TagPaths, model.NormalizeTagPath(t.Path))
 	}
-	doc.TagText = strings.Join(names, " ")
 	return doc
 }
 
@@ -70,7 +50,7 @@ func BuildRawDataRecord(raw model.RawData, tags []model.TagNode, binds map[uint6
 func BuildAssetDataRecord(
 	asset model.AssetData,
 	tags []model.TagNode,
-	binds map[uint64]model.AssetDataTag,
+	_ map[uint64]model.AssetDataTag,
 	sourceRawIDs []uint64,
 	sourceRawUUIDs []string,
 ) AssetDataRecord {
@@ -101,44 +81,25 @@ func BuildAssetDataRecord(
 		AuditedAt:          asset.AuditedAt,
 		SynthesizedAt:      asset.SynthesizedAt,
 		PublishedAt:        asset.PublishedAt,
-		CreatedAt:            asset.CreatedAt,
-		UpdatedAt:            asset.UpdatedAt,
+		CreatedAt:          asset.CreatedAt,
+		UpdatedAt:          asset.UpdatedAt,
 		SyncVersion:        asset.ESSyncVersion,
 	}
-	var names []string
+
 	for _, t := range tags {
-		bind := binds[t.ID]
-		doc.Tags = append(doc.Tags, TagRef{
-			ID: t.ID, Code: t.Code, Name: t.Name, Path: t.Path,
-			FullName: t.FullName, Level: t.Level, Domain: string(t.Domain),
-			Source: string(bind.Source), Confidence: bind.Confidence,
-		})
-		doc.TagIDs = append(doc.TagIDs, t.ID)
-		doc.TagPaths = appendAncestorPaths([]string{t.Path}, t.Path)
-		doc.TagCodes = append(doc.TagCodes, t.Code)
-		doc.TagNames = append(doc.TagNames, t.Name)
-		names = append(names, t.Name)
+		doc.TagPaths = appendUniquePath(doc.TagPaths, model.NormalizeTagPath(t.Path))
 	}
-	doc.TagText = strings.Join(names, " ")
 	return doc
 }
 
-func appendAncestorPaths(paths []string, materialized string) []string {
-	parts := strings.Split(strings.Trim(materialized, "/"), "/")
-	for i := 1; i <= len(parts); i++ {
-		p := "/" + strings.Join(parts[:i], "/")
-		if !contains(paths, p) {
-			paths = append(paths, p)
+func appendUniquePath(paths []string, path string) []string {
+	if path == "" {
+		return paths
+	}
+	for _, p := range paths {
+		if p == path {
+			return paths
 		}
 	}
-	return paths
-}
-
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return append(paths, path)
 }
