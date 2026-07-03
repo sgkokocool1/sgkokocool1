@@ -1,0 +1,17 @@
+sequenceDiagram
+    participant U as 浏览器
+    participant API as API
+    participant ES as Elasticsearch
+    participant TiDB as TiDB
+    participant Disk as 磁盘meta
+
+    U->>API: search + tag_filter
+    API->>ES: bool query tag_paths
+    ES-->>API: hits
+    API-->>U: 列表
+
+    U->>API: GET detail uuid
+    API->>TiDB: storage_path status
+    API->>ES: tag_paths stats
+    API->>Disk: 读 metadata_uri
+    API-->>U: 合并详情

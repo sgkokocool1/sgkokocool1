@@ -1,0 +1,35 @@
+erDiagram
+    RAW_DATA ||--o{ ASSET_RAW_LINK : sources
+    ASSET_DATA ||--o{ ASSET_RAW_LINK : composed_from
+    RAW_DATA ||--o{ ES_SYNC_OUTBOX : syncs
+    ASSET_DATA ||--o{ ES_SYNC_OUTBOX : syncs
+
+    RAW_DATA {
+        bigint id PK
+        char uuid UK
+        varchar storage_path UK
+        varchar manifest_ref
+        varchar metadata_uri
+        varchar status
+    }
+
+    ASSET_DATA {
+        bigint id PK
+        char uuid UK
+        varchar storage_path UK
+        varchar dataset_id
+        varchar status
+    }
+
+    ASSET_RAW_LINK {
+        bigint asset_id FK
+        bigint raw_id FK
+        varchar raw_storage_path
+    }
+
+    ES_SYNC_OUTBOX {
+        bigint id PK
+        varchar storage_path
+        varchar entity_type
+        json payload
+    }

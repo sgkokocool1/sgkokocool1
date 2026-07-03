@@ -1,0 +1,7 @@
+stateDiagram-v2
+    direction LR
+    [*] --> init: 登记资产路径
+    init --> processing: 开始 build
+    processing --> success: 合成成功
+    processing --> failure: 合成失败
+    success --> published: 发布训练

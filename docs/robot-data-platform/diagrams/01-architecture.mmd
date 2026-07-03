@@ -1,0 +1,41 @@
+flowchart TB
+    subgraph disk["文件系统"]
+        F1["episode 目录"]
+        F2["episode_meta.json"]
+        F3["tags.json"]
+        F4["lerobot 资产目录"]
+    end
+
+    subgraph tidb["TiDB 路径管理库"]
+        T1[("raw_data")]
+        T2[("asset_data")]
+        T3[("asset_raw_link")]
+        T4[("es_sync_outbox")]
+    end
+
+    subgraph es["Elasticsearch"]
+        E1[("raw_data_records")]
+        E2[("asset_data_records")]
+    end
+
+    CFG["tag-tree.yaml"]
+
+  A1["检测 / 清洗 / 预处理"] --> T1
+  A1 --> F1
+  A1 --> F3
+  T1 --> T4
+  T4 -->|"Worker"| E1
+  F2 --> E1
+  F3 --> E1
+
+  B1["合成 build"] --> T2
+  B1 --> F4
+  B1 --> T3
+  T2 --> T4
+  T4 --> E2
+
+  CFG --> UI["前端标签树"]
+  E1 --> UI
+  E2 --> UI
+  T1 --> UI
+  T2 --> UI

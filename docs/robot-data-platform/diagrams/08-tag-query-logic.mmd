@@ -1,0 +1,24 @@
+flowchart TB
+    START[用户标签筛选]
+
+    subgraph scene["scene 组 op=and"]
+        S1[kitchen]
+        S2[table_a]
+        S1 --- S2
+    end
+
+    subgraph task["task 组 op=or"]
+        T1[pick_red_block]
+        T2[place_blue_block]
+    end
+
+    START --> scene
+    START --> task
+
+    scene --> OR1{大类之间 OR}
+    task --> OR1
+
+    OR1 --> HIT[命中数据须满足任一组]
+
+    note1["组内 AND: 同时含 kitchen 且 table_a"]
+    note2["组内 OR: 含 pick 或 place 之一"]

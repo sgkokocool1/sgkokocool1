@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph TiDB
+        R[raw_data]
+        A[asset_data]
+        L[asset_raw_link]
+        O[es_sync_outbox]
+    end
+
+    subgraph Disk
+        M[episode_meta.json]
+        TG[tags.json]
+    end
+
+    subgraph ES
+        RR[raw_data_records]
+        AR[asset_data_records]
+    end
+
+    Y[tag-tree.yaml]
+
+    R --> M
+    R --> TG
+    O --> RR
+    M --> RR
+    TG --> RR
+    A --> O
+    O --> AR
+    L --> AR
+    Y -.->|UI校验| RR

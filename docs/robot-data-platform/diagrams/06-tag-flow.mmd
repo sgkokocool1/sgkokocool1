@@ -1,0 +1,15 @@
+flowchart TB
+    UI[标签树 UI]
+    YAML[tag-tree.yaml]
+    ES[(Elasticsearch tag_paths)]
+    PRE[预处理打标]
+    TG[tags.json]
+    TIDB[(TiDB 路径登记)]
+    API[API 网关]
+
+    UI --> YAML
+    UI -->|筛选查询| ES
+    PRE -->|写 tag_paths| ES
+    PRE -->|可选| TG
+    TIDB -->|路径状态| API
+    ES -->|列表结果| UI
