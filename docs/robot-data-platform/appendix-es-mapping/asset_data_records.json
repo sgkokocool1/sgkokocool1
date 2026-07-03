@@ -1,0 +1,54 @@
+{
+  "settings": {
+    "number_of_shards": 2,
+    "number_of_replicas": 1,
+    "refresh_interval": "5s",
+    "analysis": {
+      "analyzer": {
+        "text_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "cjk_width"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "asset_data_id": { "type": "long" },
+      "uuid": { "type": "keyword" },
+      "code": { "type": "keyword" },
+      "asset_type": { "type": "keyword" },
+      "status": { "type": "keyword" },
+      "name": {
+        "type": "text",
+        "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+      },
+      "description": { "type": "text", "analyzer": "text_analyzer" },
+      "dataset_id": { "type": "keyword" },
+      "robot_type": { "type": "keyword" },
+      "storage_path": { "type": "keyword", "index": false },
+      "metadata_uri": { "type": "keyword", "index": false },
+      "output_uri": { "type": "keyword" },
+      "checksum": { "type": "keyword" },
+      "episode_count": { "type": "integer" },
+      "frame_count": { "type": "long" },
+      "task_count": { "type": "integer" },
+      "total_bytes": { "type": "long" },
+      "fps": { "type": "float" },
+      "source_raw_data_ids": { "type": "long" },
+      "source_raw_data_uuids": { "type": "keyword" },
+      "tag_paths": { "type": "keyword" },
+      "auditor_id": { "type": "keyword" },
+      "audit_score": { "type": "float" },
+      "parent_asset_id": { "type": "long" },
+      "audited_at": { "type": "date" },
+      "synthesized_at": { "type": "date" },
+      "published_at": { "type": "date" },
+      "created_at": { "type": "date" },
+      "updated_at": { "type": "date" },
+      "sync_version": { "type": "long" }
+    }
+  }
+}
