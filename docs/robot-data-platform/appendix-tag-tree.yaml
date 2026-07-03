@@ -1,0 +1,54 @@
+# 标签树配置（不进数据库，供 UI 展示与校验）
+# 设计文档：docs/robot-data-platform/DESIGN.md §5
+
+raw:
+  - category: scene
+    name: 场景
+    children:
+      - path: scene/indoor
+        name: 室内
+        children:
+          - path: scene/indoor/kitchen
+            name: 厨房
+            leaf: true
+          - path: scene/indoor/table_a
+            name: 桌A
+            leaf: true
+      - path: scene/outdoor
+        name: 室外
+        leaf: true
+  - category: task
+    name: 任务
+    children:
+      - path: task/pick_red_block
+        name: 抓红块
+        leaf: true
+      - path: task/place_blue_block
+        name: 放蓝块
+        leaf: true
+  - category: quality
+    name: 质量
+    children:
+      - path: quality/high
+        name: 高质量
+        leaf: true
+      - path: quality/low
+        name: 低质量
+        leaf: true
+
+asset:
+  - category: dataset
+    name: 数据集用途
+    children:
+      - path: dataset/train
+        name: 训练集
+        leaf: true
+      - path: dataset/eval
+        name: 评测集
+        leaf: true
+  - category: experiment
+    name: 实验
+    children:
+      - path: experiment/exp-2025-w28
+        name: 第28周实验
+        leaf: true

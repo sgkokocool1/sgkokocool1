@@ -1,250 +1,87 @@
--- 机器人数据平台 · PostgreSQL DDL
+-- 机器人数据平台 · TiDB DDL（路径管理库）
 -- 设计文档：docs/robot-data-platform/DESIGN.md
+-- 原则：TiDB 只登记路径与流水线状态；标签仅存 ES
 
 -- ============================================================
--- 枚举类型（也可用 varchar + 应用层校验）
--- ============================================================
-
-CREATE TYPE raw_data_source_type AS ENUM ('collected', 'open_source', 'simulation', 'imported');
-CREATE TYPE raw_data_type AS ENUM (
-    'ros_bag', 'ros_mcap', 'mp4', 'hdf5', 'parquet',
-    'episode_dir', 'multi_modal', 'other'
-);
-CREATE TYPE raw_data_status AS ENUM (
-    'init', 'correct', 'anomaly', 'processing', 'finished', 'archived', 'deleted'
-);
-CREATE TYPE asset_data_type AS ENUM (
-    'lerobot_dataset', 'training_pack', 'eval_pack', 'synthetic', 'feature_store'
-);
-CREATE TYPE asset_data_status AS ENUM (
-    'init', 'auditing', 'processing', 'success', 'failure', 'published', 'deprecated'
-);
-CREATE TYPE tag_domain AS ENUM ('raw', 'asset');
-CREATE TYPE tag_bind_source AS ENUM ('auto', 'manual', 'rule');
-CREATE TYPE processing_stage AS ENUM (
-    'detect', 'clean', 'preprocess', 'audit', 'synthesize', 'tag'
-);
-
--- ============================================================
--- 1. raw_data 原始数据
+-- 1. raw_data 原始数据路径登记表
 -- ============================================================
 
 CREATE TABLE raw_data (
-    id                  BIGSERIAL PRIMARY KEY,
-    uuid                CHAR(36) NOT NULL UNIQUE,
-    data_type           raw_data_type NOT NULL,
-    source_type         raw_data_source_type NOT NULL,
-    status              raw_data_status NOT NULL DEFAULT 'init',
-    status_message      VARCHAR(512),
-    prev_status         raw_data_status,
-    name                VARCHAR(256) NOT NULL,
-    code                VARCHAR(128) UNIQUE,
-    description         TEXT,
-    storage_path        VARCHAR(1024) NOT NULL,
-    metadata_uri        VARCHAR(1024),
-    manifest_ref        VARCHAR(512),
-    preview_uri         VARCHAR(1024),
-    checksum            CHAR(64),
-    file_count          INTEGER NOT NULL DEFAULT 0,
-    total_bytes         BIGINT NOT NULL DEFAULT 0,
-    total_frames        INTEGER NOT NULL DEFAULT 0,
-    duration_sec        DOUBLE PRECISION NOT NULL DEFAULT 0,
-    fps                 REAL NOT NULL DEFAULT 0,
-    robot_id            VARCHAR(64),
-    operator_id         VARCHAR(64),
-    scene_code          VARCHAR(128),
-    task_name           VARCHAR(256),
-    session_key         VARCHAR(128),
-    episode_name        VARCHAR(64),
-    success_flag        BOOLEAN,
-    collected_at        TIMESTAMPTZ,
-    collection_end      TIMESTAMPTZ,
-    detected_at         TIMESTAMPTZ,
-    cleaned_at          TIMESTAMPTZ,
-    preprocessed_at     TIMESTAMPTZ,
-    archived_at         TIMESTAMPTZ,
-    extra_meta          JSONB,
-    schema_ver          VARCHAR(16) NOT NULL DEFAULT 'v1',
-    es_sync_version     BIGINT NOT NULL DEFAULT 0,
-    es_indexed_at       TIMESTAMPTZ,
-    es_doc_id           VARCHAR(64),
-    version             INTEGER NOT NULL DEFAULT 1,
-    created_by          VARCHAR(64),
-    updated_by          VARCHAR(64),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at          TIMESTAMPTZ
-);
-
-CREATE INDEX idx_raw_type_status ON raw_data (data_type, status);
-CREATE INDEX idx_raw_robot_scene ON raw_data (robot_id, scene_code);
-CREATE INDEX idx_raw_manifest_ref ON raw_data (manifest_ref);
-CREATE INDEX idx_raw_collected_at ON raw_data (collected_at);
-CREATE INDEX idx_raw_deleted_at ON raw_data (deleted_at);
+    id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uuid            CHAR(36) NOT NULL,
+    storage_path    VARCHAR(1024) NOT NULL COMMENT '物理根路径，管理主键',
+    manifest_ref    VARCHAR(512) DEFAULT NULL COMMENT 'manifest.jsonl 的 path',
+    metadata_uri    VARCHAR(1024) DEFAULT NULL COMMENT 'episode_meta.json 等元数据路径',
+    status          VARCHAR(32) NOT NULL DEFAULT 'init' COMMENT 'init/correct/anomaly/processing/finished/archived',
+    data_type       VARCHAR(32) NOT NULL DEFAULT 'episode_dir' COMMENT 'ros_bag/episode_dir/mp4/...',
+    source_type     VARCHAR(32) NOT NULL DEFAULT 'collected' COMMENT 'collected/open_source/simulation',
+    es_sync_version BIGINT NOT NULL DEFAULT 0,
+    es_indexed_at   DATETIME DEFAULT NULL,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_raw_uuid (uuid),
+    UNIQUE KEY uk_raw_storage_path (storage_path),
+    KEY idx_raw_manifest_ref (manifest_ref),
+    KEY idx_raw_status (status),
+    KEY idx_raw_type_status (data_type, status)
+) COMMENT='原始数据路径登记';
 
 -- ============================================================
--- 2. asset_data 资产数据
+-- 2. asset_data 资产路径登记表
 -- ============================================================
 
 CREATE TABLE asset_data (
-    id                  BIGSERIAL PRIMARY KEY,
-    uuid                CHAR(36) NOT NULL UNIQUE,
-    asset_type          asset_data_type NOT NULL,
-    status              asset_data_status NOT NULL DEFAULT 'init',
-    status_message      VARCHAR(512),
-    prev_status         asset_data_status,
-    name                VARCHAR(256) NOT NULL,
-    code                VARCHAR(128) UNIQUE,
-    description         TEXT,
-    storage_path        VARCHAR(1024) NOT NULL,
-    dataset_id          VARCHAR(256),
-    metadata_uri        VARCHAR(1024),
-    output_uri          VARCHAR(1024),
-    checksum            CHAR(64),
-    episode_count       INTEGER NOT NULL DEFAULT 0,
-    frame_count         BIGINT NOT NULL DEFAULT 0,
-    task_count          INTEGER NOT NULL DEFAULT 0,
-    total_bytes         BIGINT NOT NULL DEFAULT 0,
-    fps                 REAL NOT NULL DEFAULT 0,
-    robot_type          VARCHAR(64),
-    synthesis_config    JSONB,
-    audit_result        JSONB,
-    auditor_id          VARCHAR(64),
-    audit_score         REAL,
-    parent_asset_id     BIGINT REFERENCES asset_data(id),
-    build_job_id        BIGINT,
-    audited_at          TIMESTAMPTZ,
-    synthesized_at      TIMESTAMPTZ,
-    published_at        TIMESTAMPTZ,
-    deprecated_at       TIMESTAMPTZ,
-    extra_meta          JSONB,
-    es_sync_version     BIGINT NOT NULL DEFAULT 0,
-    es_indexed_at       TIMESTAMPTZ,
-    es_doc_id           VARCHAR(64),
-    version             INTEGER NOT NULL DEFAULT 1,
-    created_by          VARCHAR(64),
-    updated_by          VARCHAR(64),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at          TIMESTAMPTZ
-);
-
-CREATE INDEX idx_asset_type_status ON asset_data (asset_type, status);
-CREATE INDEX idx_asset_dataset_id ON asset_data (dataset_id);
-CREATE INDEX idx_asset_parent ON asset_data (parent_asset_id);
-CREATE INDEX idx_asset_deleted_at ON asset_data (deleted_at);
+    id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    uuid            CHAR(36) NOT NULL,
+    storage_path    VARCHAR(1024) NOT NULL COMMENT '资产根路径 /data/lerobot/...',
+    dataset_id      VARCHAR(256) DEFAULT NULL COMMENT '逻辑数据集路径 local/pick-place-v1',
+    metadata_uri    VARCHAR(1024) DEFAULT NULL COMMENT 'meta/info.json 路径',
+    status          VARCHAR(32) NOT NULL DEFAULT 'init' COMMENT 'init/processing/success/failure/published',
+    asset_type      VARCHAR(32) NOT NULL DEFAULT 'lerobot_dataset',
+    es_sync_version BIGINT NOT NULL DEFAULT 0,
+    es_indexed_at   DATETIME DEFAULT NULL,
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_asset_uuid (uuid),
+    UNIQUE KEY uk_asset_storage_path (storage_path),
+    KEY idx_asset_dataset_id (dataset_id),
+    KEY idx_asset_status (status),
+    KEY idx_asset_type_status (asset_type, status)
+) COMMENT='资产路径登记';
 
 -- ============================================================
--- 3. asset_data_raw_source 资产 ← 原始数据 多对多
+-- 3. asset_raw_link 资产 ← 原始数据 路径血缘（仅存路径关联）
 -- ============================================================
 
-CREATE TABLE asset_data_raw_source (
-    id              BIGSERIAL PRIMARY KEY,
-    asset_data_id   BIGINT NOT NULL REFERENCES asset_data(id) ON DELETE CASCADE,
-    raw_data_id     BIGINT NOT NULL REFERENCES raw_data(id) ON DELETE RESTRICT,
-    role            VARCHAR(32) NOT NULL DEFAULT 'primary',
-    weight          REAL NOT NULL DEFAULT 1,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (asset_data_id, raw_data_id)
-);
-
-CREATE INDEX idx_asset_raw_raw_id ON asset_data_raw_source (raw_data_id);
-
--- ============================================================
--- 4. tag_node 标签树
--- ============================================================
-
-CREATE TABLE tag_node (
-    id          BIGSERIAL PRIMARY KEY,
-    parent_id   BIGINT REFERENCES tag_node(id),
-    domain      tag_domain NOT NULL,
-    category    VARCHAR(64) NOT NULL,
-    path        VARCHAR(1024) NOT NULL,
-    name        VARCHAR(256) NOT NULL,
-    is_leaf     BOOLEAN NOT NULL DEFAULT FALSE,
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at  TIMESTAMPTZ,
-    UNIQUE (domain, path)
-);
-
-CREATE INDEX idx_tag_parent ON tag_node (parent_id);
-CREATE INDEX idx_tag_category ON tag_node (domain, category);
-CREATE INDEX idx_tag_leaf ON tag_node (is_leaf) WHERE is_leaf = TRUE;
+CREATE TABLE asset_raw_link (
+    id                  BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    asset_id            BIGINT NOT NULL,
+    raw_id              BIGINT NOT NULL,
+    raw_storage_path    VARCHAR(1024) NOT NULL COMMENT '冗余原始路径，便于按路径反查',
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_asset_raw (asset_id, raw_id),
+    KEY idx_link_raw_path (raw_storage_path),
+    KEY idx_link_raw_id (raw_id),
+    CONSTRAINT fk_link_asset FOREIGN KEY (asset_id) REFERENCES asset_data(id),
+    CONSTRAINT fk_link_raw FOREIGN KEY (raw_id) REFERENCES raw_data(id)
+) COMMENT='资产与原始数据路径血缘';
 
 -- ============================================================
--- 5. raw_data_tag / asset_data_tag 标签绑定
--- ============================================================
-
-CREATE TABLE raw_data_tag (
-    id          BIGSERIAL PRIMARY KEY,
-    raw_data_id BIGINT NOT NULL REFERENCES raw_data(id) ON DELETE CASCADE,
-    tag_id      BIGINT NOT NULL REFERENCES tag_node(id) ON DELETE RESTRICT,
-    source      tag_bind_source NOT NULL DEFAULT 'auto',
-    confidence  REAL NOT NULL DEFAULT 1,
-    bound_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    bound_by    VARCHAR(64),
-    UNIQUE (raw_data_id, tag_id)
-);
-
-CREATE INDEX idx_raw_tag_tag_id ON raw_data_tag (tag_id);
-
-CREATE TABLE asset_data_tag (
-    id              BIGSERIAL PRIMARY KEY,
-    asset_data_id   BIGINT NOT NULL REFERENCES asset_data(id) ON DELETE CASCADE,
-    tag_id          BIGINT NOT NULL REFERENCES tag_node(id) ON DELETE RESTRICT,
-    source          tag_bind_source NOT NULL DEFAULT 'manual',
-    confidence      REAL NOT NULL DEFAULT 1,
-    bound_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    bound_by        VARCHAR(64),
-    UNIQUE (asset_data_id, tag_id)
-);
-
-CREATE INDEX idx_asset_tag_tag_id ON asset_data_tag (tag_id);
-
--- ============================================================
--- 6. processing_log 流水线阶段日志
--- ============================================================
-
-CREATE TABLE processing_log (
-    id              BIGSERIAL PRIMARY KEY,
-    raw_data_id     BIGINT REFERENCES raw_data(id) ON DELETE SET NULL,
-    asset_data_id   BIGINT REFERENCES asset_data(id) ON DELETE SET NULL,
-    stage           processing_stage NOT NULL,
-    job_id          BIGINT,
-    status          VARCHAR(32) NOT NULL,
-    input_json      JSONB,
-    output_json     JSONB,
-    error_msg       TEXT,
-    started_at      TIMESTAMPTZ NOT NULL,
-    finished_at     TIMESTAMPTZ,
-    duration_ms     BIGINT NOT NULL DEFAULT 0,
-    operator_id     VARCHAR(64),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_plog_raw ON processing_log (raw_data_id);
-CREATE INDEX idx_plog_asset ON processing_log (asset_data_id);
-CREATE INDEX idx_plog_stage ON processing_log (stage, status);
-CREATE INDEX idx_plog_started ON processing_log (started_at);
-
--- ============================================================
--- 7. es_sync_outbox ES 同步 Outbox
+-- 4. es_sync_outbox ES 同步队列（TiDB → ES）
 -- ============================================================
 
 CREATE TABLE es_sync_outbox (
-    id              BIGSERIAL PRIMARY KEY,
-    entity_type     VARCHAR(32) NOT NULL,
+    id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    entity_type     VARCHAR(32) NOT NULL COMMENT 'raw_data / asset_data',
     entity_id       BIGINT NOT NULL,
     entity_uuid     CHAR(36) NOT NULL,
-    op              VARCHAR(16) NOT NULL,
-    payload         JSONB NOT NULL,
+    storage_path    VARCHAR(1024) NOT NULL COMMENT '路径，Worker 定位磁盘元数据',
+    op              VARCHAR(16) NOT NULL COMMENT 'index / update / delete',
+    payload         JSON DEFAULT NULL COMMENT '可选：预组装的 ES 文档；为空则由 Worker 从路径读元数据拼装',
     status          VARCHAR(16) NOT NULL DEFAULT 'pending',
-    retry_count     INTEGER NOT NULL DEFAULT 0,
+    retry_count     INT NOT NULL DEFAULT 0,
     last_error      TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at    TIMESTAMPTZ
-);
-
-CREATE INDEX idx_outbox_pending ON es_sync_outbox (entity_type, status, created_at);
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_at    DATETIME DEFAULT NULL,
+    KEY idx_outbox_pending (entity_type, status, created_at)
+) COMMENT='ES 同步 Outbox';

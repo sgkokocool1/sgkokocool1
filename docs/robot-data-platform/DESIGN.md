@@ -1,8 +1,9 @@
 # 机器人数据平台 · 详细设计文档
 
-> **版本**：v1.0  
-> **范围**：原始数据（raw）与资产数据（asset）的存储、标签、检索、看板展示  
-> **定位**：纯设计文档，与代码实现解耦。DDL 见 [appendix-ddl.sql](./appendix-ddl.sql)，ES Mapping 见 [appendix-es-mapping/](./appendix-es-mapping/)
+> **版本**：v1.1  
+> **范围**：原始数据（raw）与资产数据（asset）的路径管理、ES 检索与标签、看板展示  
+> **定位**：纯设计文档，与代码实现解耦  
+> **DDL**：[appendix-ddl.sql](./appendix-ddl.sql)（TiDB） · **ES Mapping**：[appendix-es-mapping/](./appendix-es-mapping/) · **标签树**：[appendix-tag-tree.yaml](./appendix-tag-tree.yaml)
 
 ---
 
@@ -11,8 +12,8 @@
 1. [系统概述](#1-系统概述)
 2. [架构设计](#2-架构设计)
 3. [业务流程与状态机](#3-业务流程与状态机)
-4. [PostgreSQL 表结构设计](#4-postgresql-表结构设计)
-5. [标签树设计](#5-标签树设计)
+4. [TiDB 表结构设计（路径管理库）](#4-tidb-表结构设计路径管理库)
+5. [标签设计（仅存 ES）](#5-标签设计仅存-es)
 6. [Elasticsearch 索引设计](#6-elasticsearch-索引设计)
 7. [检索设计](#7-检索设计)
 8. [ER 图设计](#8-er-图设计)
@@ -24,29 +25,33 @@
 
 ## 1. 系统概述
 
-### 1.1 背景
+### 1.1 核心分工
 
-机器人数据采集流水线产生 ROS bag、MCAP、MP4、episode 目录等多种原始格式；经检测、清洗、打标后进入 LeRobot 等训练资产。平台需要：
-
-- **权威存储**：事务性状态管理、标签树、血缘关系
-- **高效检索**：按标签树、状态、时间、任务等多维过滤与聚合
-- **可视化**：处理漏斗、分布统计、任务流成败、存储占用
+| 存储 | 职责 | 不做什么 |
+|------|------|----------|
+| **TiDB** | 登记**数据路径**、流水线状态、路径血缘 | 不存标签、不存检索元数据 |
+| **Elasticsearch** | 检索、聚合、**标签**（`tag_paths`） | 不做事务状态权威 |
+| **文件系统** | 物理数据与元数据 JSON | — |
+| **标签树配置** | UI 展示与 path 校验（YAML） | 不进任何数据库 |
 
 ### 1.2 设计目标
 
 | 目标 | 方案 |
 |------|------|
-| 状态可追溯 | PG 状态机 + `processing_log` 阶段日志 |
-| 标签灵活组合 | 大类 OR、同大类 AND；ES 单字段 `tag_paths` |
-| 检索性能 | ES 承担列表/聚合；PG 承担详情/写入 |
-| 最终一致 | Outbox 模式 PG → ES |
-| 与现有流水线兼容 | `manifest_ref` 对齐 manifest.jsonl |
+| 管理库极简 | TiDB 4 张表，核心字段是 `storage_path` |
+| 标签灵活检索 | 标签只写 ES；大类 OR、同大类 AND |
+| 检索性能 | 列表/筛选/看板走 ES |
+| 路径可追溯 | TiDB 路径登记 + `asset_raw_link` |
+| 与 manifest 对齐 | `manifest_ref` / `storage_path` 对应 manifest `path` |
 
-### 1.3 不在本期范围
+### 1.3 数据流一句话
 
-- 多机房联邦检索
-- 细粒度 RBAC（一期管理员/只读）
-- 实时视频预览
+```
+检测入库 → TiDB 登记路径 + 状态
+预处理打标 → 写 tags 到 ES（或 sidecar tags.json，Worker 索引进 ES）
+列表检索 → 只查 ES（含 tag_paths）
+详情路径 → TiDB 查路径，磁盘读 episode_meta，ES 补标签与统计字段
+```
 
 ---
 
@@ -56,61 +61,68 @@
 
 ```mermaid
 flowchart TB
-    subgraph ingest["采集与入库"]
-        A1[采集/开源/仿真] --> A2[检测程序]
-        A2 --> A3[(raw_data PG)]
+    subgraph disk["文件系统"]
+        F1["/data/raw/.../episode_007"]
+        F2["episode_meta.json"]
+        F3["tags.json 可选"]
+        F4["/data/lerobot/..."]
     end
 
-    subgraph raw_pipe["原始数据处理"]
-        A3 --> B1[数据清洗]
-        B1 -->|通过| B2[correct]
-        B1 -->|失败| B3[anomaly]
-        B2 --> B4[场景标签预处理]
-        B4 --> B5[finished]
+    subgraph tidb["TiDB 路径管理库"]
+        T1[(raw_data)]
+        T2[(asset_data)]
+        T3[(asset_raw_link)]
+        T4[(es_sync_outbox)]
     end
 
-    subgraph asset_pipe["资产处理"]
-        B5 --> C1[数据审核]
-        C1 --> C2[(asset_data PG)]
-        C2 --> C3[数据合成]
-        C3 -->|成功| C4[success]
-        C3 -->|失败| C5[failure]
-        C4 --> C6[资产打标 / published]
+    subgraph es["Elasticsearch"]
+        E1[(raw_data_records)]
+        E2[(asset_data_records)]
     end
 
-    subgraph search["检索层"]
-        B5 --> D1[(raw_data_records ES)]
-        C6 --> D2[(asset_data_records ES)]
+    subgraph cfg["配置（非 DB）"]
+        C1[tag-tree.yaml]
     end
 
-    subgraph sync["同步"]
-        A3 & C2 --> E1[(es_sync_outbox)]
-        E1 -->|Worker| D1 & D2
-    end
+    A1[检测/清洗/预处理] --> T1
+    A1 --> F1
+ 预处理打标 --> F3
+ 预处理打标 --> E1
+    T1 --> T4
+    T4 -->|Worker 读路径+磁盘| E1
 
-    subgraph ui["展示层"]
-        D1 & D2 --> F1[数据检索列表]
-        A3 & C2 --> F2[统计看板]
-        E1 --> F3[流水线监控]
-    end
+    B1[合成 build] --> T2
+    B1 --> F4
+    B1 --> T3
+    T2 --> T4
+    T4 --> E2
+
+    C1 --> UI[前端标签树]
+    E1 & E2 --> UI
+    T1 & T2 --> UI
 ```
 
-### 2.2 存储职责划分
+### 2.2 存储职责
 
-| 组件 | 职责 | 典型操作 |
-|------|------|----------|
-| **PostgreSQL** | 权威数据、状态机、外键、标签树、绑定关系 | INSERT/UPDATE 状态、绑定标签、详情查询 |
-| **Elasticsearch** | 全文检索、标签组合过滤、看板聚合 | search、aggs、prefix |
-| **es_sync_outbox** | 可靠异步同步 | 业务事务后投递，Worker 消费 |
-| **文件系统** | 物理数据 `/data/raw`、`/data/lerobot` | manifest、episode_meta、info.json |
+| 组件 | 存什么 | 典型操作 |
+|------|--------|----------|
+| **TiDB** | `storage_path`、`manifest_ref`、`metadata_uri`、status | 登记路径、推进状态、血缘 |
+| **ES** | 可检索字段 + **`tag_paths`** + 从 meta 冗余的统计字段 | search、aggs、更新标签 |
+| **tag-tree.yaml** | 树结构、显示名、category | 前端渲染、path 校验 |
+| **磁盘 meta** | episode_meta、info.json、可选 tags.json | Worker 索引时读取 |
 
 ### 2.3 读写路径
 
 ```
-写入：业务 API → PG 事务（实体 + 标签绑定 + outbox）→ COMMIT → Worker bulk index ES
-读取列表：前端 → API → ES（过滤/排序/分页）→ 返回 uuid 列表 → 按需 PG 补全详情
-读取详情：前端 → API → PG（主键/uuid）
-看板聚合：前端 → API → ES aggs 或 PG 物化表
+写入路径：
+  检测 → INSERT raw_data(storage_path, manifest_ref, status=init)
+  预处理完成 → UPDATE status=finished → Worker 读 metadata_uri + tags.json → index ES（含 tag_paths）
+  人工改标签 → 直接 UPDATE ES 文档 tag_paths（TiDB 不变）
+
+读取：
+  列表/筛选/看板 → ES
+  路径是否存在/当前状态 → TiDB
+  单条完整详情 → TiDB 路径 + 读磁盘 meta + ES 文档合并
 ```
 
 ---
@@ -121,417 +133,264 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> init: 检测入库
+    [*] --> init: 检测入库，登记路径
     init --> correct: 清洗通过
     init --> anomaly: 清洗失败
-    correct --> processing: 开始预处理/打标
-    processing --> finished: 预处理完成
+    correct --> processing: 预处理开始
+    processing --> finished: 预处理完成，索引 ES
     finished --> archived: 冷归档
-    anomaly --> init: 人工修复重跑
-    finished --> [*]
-    archived --> [*]
 ```
 
-| 状态 | 值 | 触发 | 副作用 |
-|------|-----|------|--------|
-| 初始化 | `init` | 检测程序扫描入库 | 写 `detected_at` |
-| 数据正确 | `correct` | 清洗通过 | 写 `cleaned_at` |
-| 数据异常 | `anomaly` | 清洗失败 | `status_message` 记录原因 |
-| 处理中 | `processing` | 打标预处理开始 | — |
-| 处理完成 | `finished` | 预处理完成 | 写 `preprocessed_at`；**同步 ES** |
-| 已归档 | `archived` | 冷存储迁移 | 写 `archived_at` |
+| 状态 | 触发 | TiDB | ES |
+|------|------|------|-----|
+| `init` | 扫描到新路径 | INSERT path | — |
+| `correct` / `anomaly` | 清洗 | UPDATE status | — |
+| `processing` | 打标开始 | UPDATE status | — |
+| `finished` | 打标完成 | UPDATE status | **index/update**，写入 `tag_paths` |
+| `archived` | 冷存储 | UPDATE status | 可选 delete 或保留 |
 
 ### 3.2 资产数据状态机
 
 ```mermaid
 stateDiagram-v2
-    [*] --> init: 审核选拔入库
-    init --> auditing: 开始审核
-    auditing --> processing: 审核通过，开始合成
-    init --> processing: 跳过审核
+    [*] --> init: 合成任务登记资产路径
+    init --> processing: 开始 build
     processing --> success: 合成成功
     processing --> failure: 合成失败
-    success --> published: 发布训练
-    published --> deprecated: 废弃
+    success --> published: 发布
 ```
 
-| 状态 | 值 | 触发 | 副作用 |
-|------|-----|------|--------|
-| 初始化 | `init` | 从 finished raw 选拔 | — |
-| 审核中 | `auditing` | 自动/人工审核 | 写 `audited_at` |
-| 合成中 | `processing` | build LeRobot 等 | — |
-| 成功 | `success` | 合成完成 | 写 `synthesized_at`；**同步 ES** |
-| 失败 | `failure` | 合成失败 | `status_message` |
-| 已发布 | `published` | 发布训练 | 写 `published_at`；**同步 ES** |
+| 状态 | TiDB | ES |
+|------|------|-----|
+| `init` | INSERT asset path | — |
+| `success` / `published` | UPDATE status | index，写入 `tag_paths` + `source_raw_data_ids` |
 
-### 3.3 流水线阶段（processing_log）
+### 3.3 标签写入时机（仅 ES）
 
-| stage | 对应任务 | 关联实体 |
-|-------|----------|----------|
-| `detect` | 检测程序 | raw_data |
-| `clean` | 数据清洗 | raw_data |
-| `preprocess` | 场景标签预处理 | raw_data |
-| `audit` | 数据审核 | asset_data |
-| `synthesize` | 数据合成 | asset_data |
-| `tag` | 资产打标 | asset_data |
+| 阶段 | 标签写入方式 |
+|------|----------------|
+| 自动打标（预处理） | 预处理程序输出 `tags.json` 或写 ES；Worker 索引时带入 `tag_paths` |
+| 人工修正 | API 直接 `POST /_update` ES 文档 `tag_paths` |
+| 资产打标 | 合成完成后同上，仅 ES |
+
+**TiDB 全程不涉及标签表。**
 
 ---
 
-## 4. PostgreSQL 表结构设计
+## 4. TiDB 表结构设计（路径管理库）
 
 > 完整 DDL：[appendix-ddl.sql](./appendix-ddl.sql)
 
 ### 4.1 表清单
 
-| 表名 | 说明 | 行数量级（预估） |
-|------|------|------------------|
-| `raw_data` | 原始数据主表 | 10⁵–10⁶ |
-| `asset_data` | 资产数据主表 | 10²–10⁴ |
-| `asset_data_raw_source` | 资产←原始 多对多 | 10⁵–10⁶ |
-| `tag_node` | 标签树节点 | 10²–10³ |
-| `raw_data_tag` | 原始数据标签绑定 | 10⁵–10⁶ |
-| `asset_data_tag` | 资产标签绑定 | 10³–10⁵ |
-| `processing_log` | 流水线阶段日志 | 10⁶+ |
-| `es_sync_outbox` | ES 同步队列 | 滚动清理 |
+| 表名 | 说明 | 核心 |
+|------|------|------|
+| `raw_data` | 原始数据路径登记 | `storage_path` UNIQUE |
+| `asset_data` | 资产路径登记 | `storage_path` UNIQUE |
+| `asset_raw_link` | 资产←原始路径血缘 | `raw_storage_path` |
+| `es_sync_outbox` | TiDB → ES 同步队列 | `storage_path` |
 
-### 4.2 `raw_data` 原始数据表
+**明确不建的表**：`tag_node`、`raw_data_tag`、`asset_data_tag`（标签不进库）
 
-**用途**：每条原始 episode / bag / 视频的唯一权威记录。
+### 4.2 `raw_data` 原始数据路径表
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
-| `id` | BIGSERIAL | PK | 内部主键 |
-| `uuid` | CHAR(36) | UNIQUE NOT NULL | 对外 ID，**ES `_id` 同源** |
-| `data_type` | enum/varchar(32) | NOT NULL | `ros_bag`/`ros_mcap`/`mp4`/`hdf5`/`episode_dir`/`multi_modal` |
-| `source_type` | enum/varchar(32) | NOT NULL | `collected`/`open_source`/`simulation`/`imported` |
-| `status` | enum/varchar(32) | NOT NULL | 状态机，默认 `init` |
-| `status_message` | varchar(512) | | 失败原因 |
-| `prev_status` | varchar(32) | | 上一状态（审计） |
-| `name` | varchar(256) | NOT NULL | 显示名 |
-| `code` | varchar(128) | UNIQUE | 业务编码 `RAW-20250716-0007` |
-| `description` | text | | 描述 |
-| `storage_path` | varchar(1024) | NOT NULL | 物理根路径 |
-| `metadata_uri` | varchar(1024) | | episode_meta.json 路径 |
-| `manifest_ref` | varchar(512) | INDEX | manifest.jsonl 的 `path` |
-| `preview_uri` | varchar(1024) | | 缩略图/首帧 |
-| `checksum` | char(64) | | SHA256 |
-| `file_count` | int | | 文件数 |
-| `total_bytes` | bigint | | 字节数 |
-| `total_frames` | int | | 帧数 |
-| `duration_sec` | double | | 时长（秒） |
-| `fps` | float | | 帧率 |
-| `robot_id` | varchar(64) | INDEX | 机器人 |
-| `operator_id` | varchar(64) | INDEX | 操作员 |
-| `scene_code` | varchar(128) | INDEX | 场景编码 |
-| `task_name` | varchar(256) | INDEX | 任务名 |
-| `session_key` | varchar(128) | INDEX | 采集会话 |
-| `episode_name` | varchar(64) | | episode 目录名 |
-| `success_flag` | boolean | NULL | 采集是否成功 |
-| `collected_at` | timestamptz | INDEX | 采集开始 |
-| `collection_end` | timestamptz | | 采集结束 |
-| `detected_at` | timestamptz | | 检测入库 |
-| `cleaned_at` | timestamptz | | 清洗完成 |
-| `preprocessed_at` | timestamptz | | 预处理完成 |
-| `archived_at` | timestamptz | | 归档 |
-| `extra_meta` | jsonb | | 扩展（validation 摘要等） |
-| `schema_ver` | varchar(16) | default v1 | feature schema 版本 |
-| `es_sync_version` | bigint | | 每次变更递增 |
-| `es_indexed_at` | timestamptz | | 最近 ES 同步时间 |
-| `es_doc_id` | varchar(64) | | 默认 = uuid |
-| `version` | int | | 乐观锁 |
-| `created_by` / `updated_by` | varchar(64) | | 操作人 |
-| `created_at` / `updated_at` | timestamptz | | |
-| `deleted_at` | timestamptz | INDEX | 软删除 |
+| `id` | BIGINT | PK AUTO_INCREMENT | |
+| `uuid` | CHAR(36) | UNIQUE NOT NULL | 对外 ID，ES `_id` 同源 |
+| **`storage_path`** | VARCHAR(1024) | **UNIQUE NOT NULL** | **物理根路径，管理主键** |
+| `manifest_ref` | VARCHAR(512) | INDEX | manifest.jsonl 的 `path` |
+| `metadata_uri` | VARCHAR(1024) | | episode_meta.json 绝对路径 |
+| `status` | VARCHAR(32) | NOT NULL | 状态机 |
+| `data_type` | VARCHAR(32) | NOT NULL | 路由用：`episode_dir`/`ros_bag`/… |
+| `source_type` | VARCHAR(32) | NOT NULL | `collected`/`open_source`/… |
+| `es_sync_version` | BIGINT | | 变更版本 |
+| `es_indexed_at` | DATETIME | | 最近索引时间 |
+| `created_at` / `updated_at` | DATETIME | | |
 
-**索引**：
+**刻意不存的字段**（改由 ES / 磁盘 meta 承担）：
 
-- `idx_raw_type_status (data_type, status)`
-- `idx_raw_robot_scene (robot_id, scene_code)`
-- `idx_raw_manifest_ref (manifest_ref)`
-- `idx_raw_collected_at (collected_at)`
+`name`、`task_name`、`robot_id`、`total_frames`、`tag_*`、描述文本等检索字段。
 
-### 4.3 `asset_data` 资产数据表
-
-**用途**：LeRobot 数据集、训练包、评测包等合成产物。
+### 4.3 `asset_data` 资产路径表
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
-| `id` | BIGSERIAL | PK | |
+| `id` | BIGINT | PK | |
 | `uuid` | CHAR(36) | UNIQUE NOT NULL | ES `_id` |
-| `asset_type` | enum/varchar(32) | NOT NULL | `lerobot_dataset`/`training_pack`/`eval_pack`/`synthetic` |
-| `status` | enum/varchar(32) | NOT NULL | 状态机 |
-| `status_message` | varchar(512) | | |
-| `prev_status` | varchar(32) | | |
-| `name` | varchar(256) | NOT NULL | 资产名 |
-| `code` | varchar(128) | UNIQUE | `ASSET-pick-place-v1` |
-| `description` | text | | |
-| `storage_path` | varchar(1024) | NOT NULL | `/data/lerobot/...` |
-| `dataset_id` | varchar(256) | INDEX | `local/pick-place-v1` |
-| `metadata_uri` | varchar(1024) | | meta/info.json |
-| `output_uri` | varchar(1024) | | 训练入口 |
-| `checksum` | char(64) | | |
-| `episode_count` | int | | |
-| `frame_count` | bigint | | |
-| `task_count` | int | | |
-| `total_bytes` | bigint | | |
-| `fps` | float | | |
-| `robot_type` | varchar(64) | INDEX | |
-| `synthesis_config` | jsonb | | 合成参数 date_from/filter 等 |
-| `audit_result` | jsonb | | 审核结果 |
-| `auditor_id` | varchar(64) | | |
-| `audit_score` | float | | 0–1 |
-| `parent_asset_id` | bigint | FK | 增量构建父版本 |
-| `build_job_id` | bigint | | 关联批任务 |
-| `audited_at` / `synthesized_at` / `published_at` / `deprecated_at` | timestamptz | | 时间线 |
-| `extra_meta` | jsonb | | |
-| ES 同步字段 | | | 同 raw_data |
-| 审计字段 | | | 同 raw_data |
+| **`storage_path`** | VARCHAR(1024) | **UNIQUE NOT NULL** | 资产根路径 |
+| `dataset_id` | VARCHAR(256) | INDEX | 逻辑 ID `local/pick-place-v1` |
+| `metadata_uri` | VARCHAR(1024) | | meta/info.json |
+| `status` | VARCHAR(32) | NOT NULL | |
+| `asset_type` | VARCHAR(32) | NOT NULL | `lerobot_dataset` 等 |
+| `es_sync_version` / `es_indexed_at` | | | 同步控制 |
+| `created_at` / `updated_at` | DATETIME | | |
 
-### 4.4 `asset_data_raw_source` 血缘关联
+### 4.4 `asset_raw_link` 路径血缘
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `asset_data_id` | bigint FK | 资产 |
-| `raw_data_id` | bigint FK | 来源原始数据 |
-| `role` | varchar(32) | `primary` / `supplement` |
-| `weight` | float | 合成权重，默认 1 |
+| `asset_id` | BIGINT FK | 资产 |
+| `raw_id` | BIGINT FK | 原始数据 |
+| `raw_storage_path` | VARCHAR(1024) | **冗余原始路径**，支持按路径反查资产 |
 
-约束：`UNIQUE(asset_data_id, raw_data_id)`
+约束：`UNIQUE(asset_id, raw_id)`
 
-### 4.5 `tag_node` 标签树
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | BIGSERIAL PK | |
-| `parent_id` | bigint FK NULL | 父节点，NULL=根 |
-| `domain` | enum | `raw` 场景标签 / `asset` 资产标签 |
-| `category` | varchar(64) | **大类**，= path 首段 |
-| `path` | varchar(1024) | 物化路径 `scene/indoor/kitchen` |
-| `name` | varchar(256) | 显示名 |
-| `is_leaf` | boolean | 是否可绑定 |
-| `is_active` | boolean | 是否启用 |
-
-约束：`UNIQUE(domain, path)`
-
-### 4.6 `raw_data_tag` / `asset_data_tag` 绑定表
+### 4.5 `es_sync_outbox`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `raw_data_id` / `asset_data_id` | bigint FK | 实体 |
-| `tag_id` | bigint FK | 标签节点（须为叶子） |
-| `source` | enum | `auto` / `manual` / `rule` |
-| `confidence` | float | 0–1，自动打标置信度 |
-| `bound_at` | timestamptz | 绑定时间 |
-| `bound_by` | varchar(64) | 操作人 |
+| `entity_type` | VARCHAR(32) | `raw_data` / `asset_data` |
+| `entity_id` | BIGINT | |
+| `entity_uuid` | CHAR(36) | |
+| **`storage_path`** | VARCHAR(1024) | Worker 定位磁盘 |
+| `op` | VARCHAR(16) | index / update / delete |
+| `payload` | JSON | 可选预组装文档；空则 Worker 从路径读取 |
+| `status` | VARCHAR(16) | pending / done / failed |
 
-约束：`UNIQUE(实体_id, tag_id)`
+### 4.6 TiDB 使用注意
 
-### 4.7 `processing_log` 阶段日志
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `raw_data_id` | bigint NULL | 二选一 |
-| `asset_data_id` | bigint NULL | 二选一 |
-| `stage` | enum | detect/clean/preprocess/audit/synthesize/tag |
-| `job_id` | bigint | 批任务 ID |
-| `status` | varchar(32) | running/success/failed |
-| `input_json` / `output_json` | jsonb | 阶段输入输出 |
-| `error_msg` | text | |
-| `started_at` / `finished_at` | timestamptz | |
-| `duration_ms` | bigint | |
-
-### 4.8 `es_sync_outbox` 同步队列
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `entity_type` | varchar(32) | `raw_data` / `asset_data` |
-| `entity_id` | bigint | PG 主键 |
-| `entity_uuid` | char(36) | |
-| `op` | varchar(16) | index / update / delete |
-| `payload` | jsonb | ES 文档 JSON |
-| `status` | varchar(16) | pending / done / failed |
-| `retry_count` | int | 最大 5 次 |
+| 项 | 建议 |
+|----|------|
+| 引擎 | TiDB 7.x+，MySQL 协议 |
+| 主键 | `AUTO_INCREMENT`，避免热点可用 `AUTO_RANDOM` |
+| 事务 | 路径登记 + outbox 同一事务 |
+| 字符集 | `utf8mb4` |
+| 路径列 | 长度 1024，建 UNIQUE 前统一规范化（无尾斜杠） |
 
 ---
 
-## 5. 标签树设计
+## 5. 标签设计（仅存 ES）
 
-### 5.1 路径规范
+### 5.1 原则
 
-- 格式：`{category}/{...}/{leaf}`，**无 leading `/`**
-- `category` = path 第一段，代表标签大类
-- 仅 **叶子节点**（`is_leaf=true`）可绑定到数据
-- 树深度建议 ≤ 5，path 长度 ≤ 1024
+| 项 | 说明 |
+|----|------|
+| 存储位置 | **仅 ES 文档字段 `tag_paths`** |
+| 树结构 | [appendix-tag-tree.yaml](./appendix-tag-tree.yaml)，不进 TiDB |
+| 绑定关系 | 不建绑定表；`tag_paths` 数组即绑定结果 |
+| 可选 sidecar | 预处理可写 `{storage_path}/tags.json` 供 Worker 读取 |
 
-### 5.2 查询语义
+### 5.2 路径规范
 
-| 层级 | 逻辑 | 说明 |
-|------|------|------|
-| **不同 category** | **OR** | 满足任一大类条件即可 |
-| **同一 category 内多选** | **AND** | 必须同时包含所有选中标签 |
+- 格式：`{category}/{...}/{leaf}`，无 leading `/`
+- `category` = 首段，代表大类
+- 示例：`scene/indoor/kitchen`、`task/pick_red_block`
 
-**示例**：用户选择
+### 5.3 查询语义
 
-- 场景类：`厨房` + `桌A`（AND）
-- 任务类：`抓红块`（单选）
+| 层级 | 逻辑 |
+|------|------|
+| **不同 category** | **OR** |
+| **同一 category 内多选** | **AND** |
 
-语义 = （含厨房 **且** 含桌A）**或**（含抓红块）
+示例：`(厨房 AND 桌A) OR 抓红块` → 见 [§7.2](#72-标签组合查询核心)
 
-### 5.3 树示例（domain=raw）
+### 5.4 标签树配置（YAML）
 
-```
-scene                          [category=scene]
-├── scene/indoor               室内
-│   ├── scene/indoor/kitchen   厨房 ★叶子
-│   └── scene/indoor/table_a   桌A ★叶子
-├── scene/outdoor              室外
-task                           [category=task]
-└── task/pick_red_block        抓红块 ★叶子
-quality                        [category=quality]
-└── quality/high               高质量 ★叶子
-```
+树仅供 UI 展示与提交前校验，示例见 [appendix-tag-tree.yaml](./appendix-tag-tree.yaml)。
 
-### 5.4 树示例（domain=asset）
-
-```
-dataset                        [category=dataset]
-├── dataset/train              训练集 ★叶子
-└── dataset/eval               评测集 ★叶子
-experiment                     [category=experiment]
-└── experiment/exp-2025-w28    第28周实验 ★叶子
+```yaml
+raw:
+  - category: scene
+    name: 场景
+    children:
+      - path: scene/indoor/kitchen
+        name: 厨房
+        leaf: true
 ```
 
-### 5.5 PG 与 ES 分工
+API 建议：`GET /api/v1/tag-tree?domain=raw` 直接返回 YAML 解析结果，**不查数据库**。
 
-| 信息 | 存储位置 | 说明 |
-|------|----------|------|
-| 树结构、父子关系 | PG `tag_node` | 权威 |
-| 绑定关系、source、confidence | PG 绑定表 | 权威，不同步 ES |
-| 绑定叶子的 path 列表 | ES `tag_paths` | 检索用 |
+### 5.5 预处理输出 `tags.json`（可选）
+
+```json
+{
+  "tag_paths": ["scene/indoor/kitchen", "task/pick_red_block"],
+  "source": "auto",
+  "updated_at": "2025-07-16T22:30:00Z"
+}
+```
+
+路径：`{storage_path}/tags.json`。Worker 索引 ES 时合并进文档；**不写入 TiDB**。
+
+### 5.6 人工改标流程
+
+```
+用户在前端勾选标签 → PATCH /api/v1/raw-data/{uuid}/tags
+  → 校验 path 在 tag-tree.yaml 内且为 leaf
+  → 更新 ES tag_paths only
+  → TiDB 无变更（或可选 bump es_sync_version 仅用于审计）
+```
 
 ---
 
 ## 6. Elasticsearch 索引设计
 
-> 完整 Mapping：[appendix-es-mapping/](./appendix-es-mapping/)
+> Mapping：[appendix-es-mapping/](./appendix-es-mapping/)
 
 ### 6.1 索引划分
 
-| 索引名 | 文档 | PG 来源 | 写入时机 |
-|--------|------|---------|----------|
-| `raw_data_records` | 原始数据检索文档 | raw_data + 标签绑定 | status→`finished` 或标签变更 |
-| `asset_data_records` | 资产检索文档 | asset_data + 标签 + 血缘 | status→`success`/`published` 或标签变更 |
+| 索引 | 写入时机 | `_id` |
+|------|----------|-------|
+| `raw_data_records` | raw `status=finished` 或标签/meta 变更 | `uuid` |
+| `asset_data_records` | asset `success`/`published` 或标签变更 | `uuid` |
 
-**通用约定**：
+### 6.2 字段分层
 
-- `_id` = `uuid`（与 PG 一致，幂等 upsert）
-- `dynamic: strict`（禁止未声明字段）
-- `refresh_interval: 5s`（近实时，非强一致）
+| 层级 | 字段来源 | 示例 |
+|------|----------|------|
+| 关联 TiDB | Worker 从 TiDB/outbox 带入 | `uuid`, `storage_path`, `manifest_ref`, `status` |
+| 磁盘 meta | 读 `metadata_uri` | `name`, `task_name`, `robot_id`, `total_frames`, `collected_at` |
+| **标签** | **tags.json 或打标程序** | **`tag_paths`** |
+| 血缘 | `asset_raw_link` + TiDB | `source_raw_data_ids`, `source_raw_data_uuids` |
 
-### 6.2 `raw_data_records` 文档结构
-
-| 字段 | ES 类型 | 可检索 | 说明 |
-|------|---------|--------|------|
-| `raw_data_id` | long | filter | PG 主键 |
-| `uuid` | keyword | filter | 对外 ID |
-| `code` | keyword | filter | 业务编码 |
-| `data_type` | keyword | filter/aggs | |
-| `source_type` | keyword | filter/aggs | |
-| `status` | keyword | filter/aggs | |
-| `name` | text + keyword | match/sort | |
-| `description` | text | match | 全文 |
-| `task_name` | keyword | filter/aggs | |
-| `scene_code` | keyword | filter | |
-| `robot_id` | keyword | filter/aggs | |
-| `operator_id` | keyword | filter/aggs | |
-| `session_key` | keyword | filter | |
-| `episode_name` | keyword | filter | |
-| `storage_path` | keyword | 不索引 | 仅存储 |
-| `metadata_uri` | keyword | 不索引 | 仅存储 |
-| `manifest_ref` | keyword | filter | |
-| `checksum` | keyword | filter | |
-| `file_count` | integer | aggs | |
-| `total_bytes` | long | aggs | |
-| `total_frames` | integer | aggs | |
-| `duration_sec` | double | aggs | |
-| `fps` | float | | |
-| `success_flag` | boolean | filter/aggs | |
-| **`tag_paths`** | **keyword[]** | **term/prefix** | **唯一标签字段** |
-| `collected_at` … `preprocessed_at` | date | range/aggs | |
-| `created_at` / `updated_at` | date | sort | |
-| `sync_version` | long | 内部 | 幂等校验 |
-
-**文档示例**：
+### 6.3 `raw_data_records` 文档示例
 
 ```json
 {
-  "raw_data_id": 10001,
   "uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "code": "RAW-20250716-0007",
+  "storage_path": "/data/raw/2025-07-16/am_real_001/episode_007",
+  "manifest_ref": "2025-07-16/am_real_001/episode_007",
+  "status": "finished",
   "data_type": "episode_dir",
   "source_type": "collected",
-  "status": "finished",
   "name": "pick episode 007",
   "task_name": "pick_red_block",
   "robot_id": "am_real_001",
-  "manifest_ref": "2025-07-16/am_real_001/episode_007",
-  "success_flag": true,
   "total_frames": 150,
   "tag_paths": [
     "scene/indoor/kitchen",
     "task/pick_red_block"
   ],
   "collected_at": "2025-07-16T10:00:00Z",
-  "preprocessed_at": "2025-07-16T22:30:00Z",
   "sync_version": 3
 }
 ```
 
-### 6.3 `asset_data_records` 文档结构
-
-在 raw 基础上增加：
-
-| 字段 | ES 类型 | 说明 |
-|------|---------|------|
-| `asset_data_id` | long | |
-| `asset_type` | keyword | |
-| `dataset_id` | keyword | |
-| `robot_type` | keyword | |
-| `output_uri` | keyword | |
-| `episode_count` / `frame_count` / `task_count` | int/long | 规模 |
-| `source_raw_data_ids` | long[] | 反查血缘 |
-| `source_raw_data_uuids` | keyword[] | |
-| `auditor_id` / `audit_score` | keyword/float | |
-| `parent_asset_id` | long | 版本链 |
-| `audited_at` / `synthesized_at` / `published_at` | date | |
-
-**文档示例**：
+### 6.4 `asset_data_records` 文档示例
 
 ```json
 {
-  "asset_data_id": 2001,
   "uuid": "660e8400-e29b-41d4-a716-446655440001",
-  "asset_type": "lerobot_dataset",
-  "status": "success",
-  "name": "pick-place-w2-202507",
+  "storage_path": "/data/lerobot/pick-place-w2-202507",
   "dataset_id": "local/pick-place-w2-202507",
+  "status": "success",
+  "asset_type": "lerobot_dataset",
   "episode_count": 175,
   "frame_count": 26250,
   "source_raw_data_ids": [10001, 10002],
+  "source_raw_data_uuids": ["550e...", "551e..."],
   "tag_paths": ["dataset/train", "experiment/exp-2025-w28"],
   "sync_version": 2
 }
 ```
 
-### 6.4 字段设计原则
+### 6.5 标签字段
 
-| 原则 | 说明 |
-|------|------|
-| 标签只存 `tag_paths` | 去掉 nested、tag_ids、tag_codes、tag_text 等冗余 |
-| 物理路径不索引 | `storage_path` index=false，减少体积 |
-| keyword 用于过滤/聚合 | status、data_type、robot_id 等 |
-| text 用于模糊搜 | name、description |
-| 时间字段统一 date | ISO8601 |
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `tag_paths` | keyword[] | **唯一标签字段**；term 精确、prefix 子树 |
 
 ---
 
@@ -539,21 +398,18 @@ experiment                     [category=experiment]
 
 ### 7.1 场景矩阵
 
-| 场景 | 数据源 | 查询类型 |
-|------|--------|----------|
-| 原始数据列表（多维筛选） | ES `raw_data_records` | bool filter + sort |
-| 资产列表 | ES `asset_data_records` | 同上 |
-| 标签树节点下全部数据 | ES | prefix on `tag_paths` |
-| 多大类标签组合筛选 | ES | bool should + must（见 §7.2） |
-| 单条详情 | PG | uuid / id |
-| 状态变更 | PG | 事务 |
-| 看板分布统计 | ES aggs 或 PG 物化表 | terms / date_histogram |
-| 资产反查来源 raw | ES | term on `source_raw_data_ids` |
-| raw 查生成了哪些资产 | ES | term on `source_raw_data_ids` 反向 |
+| 场景 | 数据源 |
+|------|--------|
+| 多维列表筛选（含标签） | **ES** |
+| 看板聚合 | **ES** |
+| 路径是否已登记 / 当前状态 | **TiDB** |
+| 标签树 UI | **tag-tree.yaml** |
+| 改标签 | **ES only** |
+| 资产血缘 | ES `source_raw_data_ids` 或 TiDB `asset_raw_link` |
 
 ### 7.2 标签组合查询（核心）
 
-**输入结构**（API 层）：
+**请求**：
 
 ```json
 {
@@ -593,67 +449,21 @@ experiment                     [category=experiment]
 }
 ```
 
-**语义**：`(厨房 AND 桌A) OR (抓红块)`
+### 7.3 子树检索
 
-**仅单一大类、多选 AND**：
-
-```json
-{
-  "query": {
-    "bool": {
-      "must": [
-        { "term": { "tag_paths": "scene/indoor/kitchen" } },
-        { "term": { "tag_paths": "quality/high" } }
-      ]
-    }
-  }
-}
-```
-
-### 7.3 子树检索（点选树节点）
-
-用户点击树节点 `scene/indoor`，需命中其下所有叶子绑定。
+点击树节点 `scene/indoor`：
 
 ```json
-{
-  "query": {
-    "prefix": { "tag_paths": "scene/indoor/" }
-  }
-}
+{ "prefix": { "tag_paths": "scene/indoor/" } }
 ```
 
-> 尾斜杠 `/` 避免 `scene/indoor` 误匹配 `scene/indoor2`。
-
-### 7.4 列表页组合查询（典型）
+### 7.4 按路径精确查
 
 ```json
-{
-  "query": {
-    "bool": {
-      "filter": [
-        { "terms": { "status": ["finished", "correct"] } },
-        { "term": { "source_type": "collected" } },
-        { "range": { "collected_at": { "gte": "2025-07-01", "lte": "2025-07-31" } } }
-      ],
-      "must": [
-        {
-          "bool": {
-            "should": [
-              { "bool": { "must": [
-                { "term": { "tag_paths": "scene/indoor/kitchen" } }
-              ]}}
-            ],
-            "minimum_should_match": 1
-          }
-        }
-      ]
-    }
-  },
-  "sort": [{ "collected_at": "desc" }],
-  "from": 0,
-  "size": 20
-}
+{ "term": { "storage_path": "/data/raw/2025-07-16/am_real_001/episode_007" } }
 ```
+
+或 TiDB：`SELECT * FROM raw_data WHERE storage_path = ?`
 
 ### 7.5 看板聚合
 
@@ -661,207 +471,119 @@ experiment                     [category=experiment]
 GET raw_data_records/_search
 {
   "size": 0,
-  "query": {
-    "bool": {
-      "filter": [
-        { "range": { "collected_at": { "gte": "now-30d/d" } } }
-      ]
-    }
-  },
   "aggs": {
     "by_status": { "terms": { "field": "status" } },
-    "by_data_type": { "terms": { "field": "data_type", "size": 20 } },
-    "by_source_type": { "terms": { "field": "source_type" } },
-    "success_breakdown": { "terms": { "field": "success_flag" } },
+    "by_data_type": { "terms": { "field": "data_type" } },
     "top_tag_paths": { "terms": { "field": "tag_paths", "size": 50 } },
     "episodes_over_time": {
-      "date_histogram": {
-        "field": "collected_at",
-        "calendar_interval": "day"
-      }
+      "date_histogram": { "field": "collected_at", "calendar_interval": "day" }
     }
   }
 }
 ```
 
-### 7.6 资产血缘反查
+### 7.6 API 建议
 
-```json
-GET asset_data_records/_search
-{
-  "query": { "term": { "source_raw_data_ids": 10001 } }
-}
-```
-
-### 7.7 API 检索接口设计（建议）
-
-| 方法 | 路径 | 说明 |
+| 方法 | 路径 | 存储 |
 |------|------|------|
-| GET | `/api/v1/raw-data/search` | ES 列表，返回 uuid 列表 + 摘要 |
-| GET | `/api/v1/raw-data/{uuid}` | PG 详情 |
-| GET | `/api/v1/assets/search` | ES 资产列表 |
-| GET | `/api/v1/assets/{uuid}` | PG 详情 + 来源 raw 列表 |
-| GET | `/api/v1/tags/tree` | PG 标签树（按 domain） |
-| GET | `/api/v1/stats/overview` | 看板 KPI |
-| GET | `/api/v1/stats/distribution` | 分布聚合 |
-
-**search 请求体**：
-
-```json
-{
-  "q": "kitchen pick",
-  "status": ["finished"],
-  "data_type": ["episode_dir"],
-  "date_from": "2025-07-01",
-  "date_to": "2025-07-31",
-  "robot_id": "am_real_001",
-  "tag_filter": {
-    "scene": ["scene/indoor/kitchen"],
-    "task": ["task/pick_red_block"]
-  },
-  "tag_mode": "group_or",
-  "page": 1,
-  "page_size": 20,
-  "sort": "collected_at:desc"
-}
-```
+| GET | `/api/v1/raw-data/search` | ES |
+| GET | `/api/v1/raw-data/{uuid}` | TiDB 路径 + ES + 磁盘 meta |
+| PATCH | `/api/v1/raw-data/{uuid}/tags` | **仅 ES** |
+| GET | `/api/v1/tag-tree` | YAML 配置 |
+| POST | `/api/v1/raw-data/register` | TiDB 登记路径 |
+| GET | `/api/v1/assets/search` | ES |
 
 ---
 
 ## 8. ER 图设计
 
-### 8.1 核心实体关系（逻辑 ER）
+### 8.1 TiDB 路径管理 ER
 
 ```mermaid
 erDiagram
-    RAW_DATA ||--o{ RAW_DATA_TAG : has
-    TAG_NODE ||--o{ RAW_DATA_TAG : bound_to
-    RAW_DATA ||--o{ PROCESSING_LOG : logs
-    RAW_DATA ||--o{ ASSET_DATA_RAW_SOURCE : sources
-    ASSET_DATA ||--o{ ASSET_DATA_RAW_SOURCE : composed_from
-    ASSET_DATA ||--o{ ASSET_DATA_TAG : has
-    TAG_NODE ||--o{ ASSET_DATA_TAG : bound_to
-    ASSET_DATA ||--o{ PROCESSING_LOG : logs
-    TAG_NODE ||--o{ TAG_NODE : parent_of
+    RAW_DATA ||--o{ ASSET_RAW_LINK : "raw_storage_path"
+    ASSET_DATA ||--o{ ASSET_RAW_LINK : asset_id
     RAW_DATA ||--o{ ES_SYNC_OUTBOX : syncs
     ASSET_DATA ||--o{ ES_SYNC_OUTBOX : syncs
 
     RAW_DATA {
         bigint id PK
         char uuid UK
-        varchar status
+        varchar storage_path UK "核心"
         varchar manifest_ref
-        varchar storage_path
-        bigint es_sync_version
+        varchar metadata_uri
+        varchar status
     }
 
     ASSET_DATA {
         bigint id PK
         char uuid UK
-        varchar asset_type
-        varchar status
+        varchar storage_path UK "核心"
         varchar dataset_id
-        bigint parent_asset_id FK
-    }
-
-    TAG_NODE {
-        bigint id PK
-        bigint parent_id FK
-        enum domain
-        varchar category
-        varchar path UK
-        varchar name
-        boolean is_leaf
-    }
-
-    RAW_DATA_TAG {
-        bigint raw_data_id FK
-        bigint tag_id FK
-        enum source
-        float confidence
-    }
-
-    ASSET_DATA_TAG {
-        bigint asset_data_id FK
-        bigint tag_id FK
-        enum source
-        float confidence
-    }
-
-    ASSET_DATA_RAW_SOURCE {
-        bigint asset_data_id FK
-        bigint raw_data_id FK
-        varchar role
-        float weight
-    }
-
-    PROCESSING_LOG {
-        bigint id PK
-        enum stage
+        varchar metadata_uri
         varchar status
-        timestamptz started_at
+    }
+
+    ASSET_RAW_LINK {
+        bigint asset_id FK
+        bigint raw_id FK
+        varchar raw_storage_path
     }
 
     ES_SYNC_OUTBOX {
         bigint id PK
+        varchar storage_path
         varchar entity_type
-        bigint entity_id
-        jsonb payload
-        varchar status
+        json payload
     }
 ```
 
-### 8.2 标签树结构（示意）
-
-```mermaid
-flowchart TD
-    subgraph raw_domain["domain = raw"]
-        S[scene] --> SI[scene/indoor]
-        SI --> SK[scene/indoor/kitchen ★]
-        SI --> ST[scene/indoor/table_a ★]
-        S --> SO[scene/outdoor]
-        T[task] --> TP[task/pick_red_block ★]
-        Q[quality] --> QH[quality/high ★]
-    end
-
-    subgraph asset_domain["domain = asset"]
-        D[dataset] --> DT[dataset/train ★]
-        D --> DE[dataset/eval ★]
-        E[experiment] --> EW[experiment/exp-2025-w28 ★]
-    end
-
-    RD[(raw_data)] -.->|raw_data_tag| SK
-    RD -.->|raw_data_tag| TP
-    AD[(asset_data)] -.->|asset_data_tag| DT
-```
-
-★ = 可绑定叶子节点
-
-### 8.3 数据流 ER（跨存储）
+### 8.2 跨存储关系（含 ES 标签）
 
 ```mermaid
 flowchart LR
-    subgraph PG["PostgreSQL"]
-        R[raw_data]
-        A[asset_data]
-        TN[tag_node]
-        RT[raw_data_tag]
-        OB[es_sync_outbox]
+    subgraph TiDB
+        R[raw_data 路径]
+        A[asset_data 路径]
+        L[asset_raw_link]
     end
 
-    subgraph ES["Elasticsearch"]
-        RR[raw_data_records]
-        AR[asset_data_records]
+    subgraph Disk
+        M[episode_meta.json]
+        TG[tags.json]
     end
 
-    R --- RT --- TN
-    A --- AT[asset_data_tag] --- TN
-    R --> OB
-    A --> OB
-    OB -->|Worker| RR
-    OB -->|Worker| AR
-    RT -.->|tag_paths| RR
-    AT -.->|tag_paths| AR
+    subgraph ES
+        RR[raw_data_records tag_paths]
+        AR[asset_data_records tag_paths]
+    end
+
+    subgraph Cfg
+        Y[tag-tree.yaml]
+    end
+
+    R --> M
+    R --> TG
+    TG -->|Worker| RR
+    M -->|Worker| RR
+    A -->|Worker| AR
+    L --> AR
+    Y -.->|UI 校验| RR
+```
+
+**注意**：虚线表示标签树只参与 UI，与 TiDB 无实体关系。
+
+### 8.3 标签不在 DB 的示意
+
+```mermaid
+flowchart TB
+    UI[标签树 UI] --> YAML[tag-tree.yaml]
+    UI -->|筛选| ES[(Elasticsearch tag_paths)]
+    PRE[预处理] -->|写 tag_paths| ES
+    PRE -->|可选| TG[tags.json]
+    TIDB[(TiDB)] -->|仅路径+状态| REG[路径登记]
+    ES -->|列表结果| UI
+    TIDB -->|路径存在性| API
 ```
 
 ---
@@ -872,216 +594,79 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    APP[数据平台 Web]
-    APP --> OV[总览 Overview]
-    APP --> RD[原始数据 Raw Data]
-    APP --> AD[资产数据 Assets]
-    APP --> PL[流水线 Pipeline]
-    APP --> ST[存储 Storage]
-    APP --> TG[标签管理 Tags]
+    APP[数据平台]
+    APP --> OV[总览]
+    APP --> RD[原始数据]
+    APP --> AD[资产数据]
+    APP --> PL[流水线]
+    APP --> ST[存储]
 
-    RD --> RD_LIST[列表 + 筛选]
-    RD --> RD_DETAIL[详情 + 时间线]
-    AD --> AD_LIST[列表 + 筛选]
-    AD --> AD_DETAIL[详情 + 血缘]
-    TG --> TG_TREE[树编辑]
-    TG --> TG_BIND[绑定审计]
+    RD --> RD_LIST[ES 列表 + 标签筛选]
+    RD --> RD_DETAIL[TiDB 路径 + ES 标签 + meta]
 ```
 
-### 9.2 页面清单
+**移除「标签管理 DB 页」**，改为「标签树配置」只读展示 + ES 改标。
 
-| 页面 | 路由 | 数据源 | 核心功能 |
-|------|------|--------|----------|
-| 总览 | `/` | ES aggs + PG | KPI 卡片、趋势、漏斗 |
-| 原始数据列表 | `/raw-data` | ES | 多维筛选、标签树、分页 |
-| 原始数据详情 | `/raw-data/:uuid` | PG | 元数据、标签、阶段日志、预览 |
-| 资产列表 | `/assets` | ES | 筛选、按 dataset 分组 |
-| 资产详情 | `/assets/:uuid` | PG | 合成配置、来源 raw 列表、版本链 |
-| 流水线 | `/pipeline` | PG `processing_log` | 任务流历史、成败、耗时 |
-| 分布统计 | `/distribution` | ES aggs | 按类型/来源/任务/标签分布 |
-| 存储 | `/storage` | 文件扫描 | 磁盘占用、分层占比 |
-| 标签管理 | `/tags` | PG | 树 CRUD、启用/停用 |
-
-### 9.3 总览页（Overview）
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  机器人数据平台                                    [日期范围 ▼] [刷新]   │
-├─────────────────────────────────────────────────────────────────────────┤
-│ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
-│ │原始数据  │ │已完成    │ │待处理    │ │资产数据集│ │磁盘占用  │       │
-│ │ 12,450   │ │  9,820   │ │  1,230   │ │    28    │ │  2.4 TB  │       │
-│ │ +120 今日│ │ 78.9%    │ │          │ │ +2 本周  │ │ raw 1.8T │       │
-│ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
-├──────────────────────────────┬──────────────────────────────────────────┤
-│  采集趋势（折线）             │  处理漏斗（漏斗图）                       │
-│  episodes / 帧数 / 日        │  init→correct→finished→imported         │
-├──────────────────────────────┼──────────────────────────────────────────┤
-│  来源分布（饼图）             │  任务成功率（柱状）                       │
-│  ros / sim / mp4             │  按 task_name 分组                       │
-└──────────────────────────────┴──────────────────────────────────────────┘
-```
-
-**KPI 定义**：
-
-| 卡片 | 指标 | 来源 |
-|------|------|------|
-| 原始数据 | count(raw) | ES `raw_data_records` 或 PG |
-| 已完成 | status=finished | ES filter aggs |
-| 待处理 | status in (init,correct,processing) | ES |
-| 资产数据集 | count(asset) status=success | ES |
-| 磁盘占用 | storage_snapshots | 扫描脚本 |
-
-### 9.4 原始数据列表页（核心检索页）
+### 9.2 原始数据列表页
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ 原始数据                                                                │
 ├──────────────┬──────────────────────────────────────────────────────────┤
-│ 标签树       │  [搜索框: 名称/任务/manifest...]                          │
-│              │  状态[▼] 类型[▼] 来源[▼] 机器人[▼] 日期[──●──]  [搜索]   │
-│ ▼ scene      │ ─────────────────────────────────────────────────────────  │
-│   ▼ indoor   │  ☐ 名称          状态      标签              采集时间    │
-│     ☑ kitchen│  ☐ ep_007        finished  厨房,抓红块      07-16 10:00  │
-│     ☑ table_a│  ☐ ep_008        finished  厨房,桌A,抓红块  07-16 10:15  │
-│   outdoor    │  ☐ ep_009        anomaly   —                07-16 11:00  │
+│ 标签树       │  [搜索] 状态[▼] 类型[▼] 日期[──●──]           [搜索]      │
+│ (YAML 加载)  │ ─────────────────────────────────────────────────────────  │
+│ ▼ scene      │  路径 manifest_ref          状态    标签        采集时间  │
+│   ☑ kitchen  │  .../episode_007            finished 厨房,抓红块  07-16    │
 │ ▼ task       │                                                          │
-│   ☑ pick_red │  < 1 2 3 ... 50 >                         共 9,820 条   │
-│ ▼ quality    │                                                          │
-│   ☐ high     │  已选: scene 厨房+桌A (AND) | task 抓红块 → OR 组合      │
+│   ☑ pick_red │  筛选走 ES · 路径列可跳转 TiDB 详情                       │
 └──────────────┴──────────────────────────────────────────────────────────┘
 ```
 
-**标签树交互规则**：
+### 9.3 详情页分区
+
+| 区块 | 数据来源 |
+|------|----------|
+| 路径信息 | **TiDB**：`storage_path`、`manifest_ref`、`metadata_uri`、`status` |
+| 采集元数据 | **磁盘** episode_meta.json |
+| 标签 | **ES** `tag_paths`；编辑保存只调 ES API |
+| 关联资产 | **ES** 或 TiDB `asset_raw_link` |
+
+### 9.4 标签编辑交互
 
 | 操作 | 行为 |
 |------|------|
-| 勾选同 category 下多个叶子 | 该 category 内 **AND** |
-| 勾选不同 category 的叶子 | category 之间 **OR** |
-| 点击非叶子节点 | 切换为 **子树模式**（prefix 检索），勾选清空 |
-| 树上方显示已选摘要 | `scene: 厨房+桌A OR task: 抓红块` |
+| 勾选叶子 | 更新本地筛选条件 → ES 查询 |
+| 保存标签 | PATCH ES，**不写 TiDB** |
+| 树节点展示名 | 来自 YAML，非 DB |
 
-**列表列**：
+### 9.5 总览 KPI
 
-| 列 | 字段 | 说明 |
-|----|------|------|
-| 名称 | name + episode_name | 可点击进详情 |
-| 状态 | status | 色块：init 灰、finished 绿、anomaly 红 |
-| 标签 | tag_paths → name | 最多显示 3 个，超出 +N |
-| 类型 | data_type | |
-| 机器人 | robot_id | |
-| 任务 | task_name | |
-| 帧数 | total_frames | |
-| 采集时间 | collected_at | 默认排序 |
-
-### 9.5 原始数据详情页
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ ← 返回   pick episode 007                    [finished]  RAW-20250716-007 │
-├─────────────────────────────────────────────────────────────────────────┤
-│  基本信息          │  标签                                    [编辑]    │
-│  manifest: ...     │  scene/indoor/kitchen  厨房   auto 0.95            │
-│  路径: /data/raw/..│  task/pick_red_block   抓红块  auto 0.88           │
-│  帧数: 150  fps:30 │                                                    │
-├────────────────────┴────────────────────────────────────────────────────┤
-│  阶段时间线                                                              │
-│  ● detected  07-16 22:00  ● cleaned 22:10  ● finished 22:30             │
-├─────────────────────────────────────────────────────────────────────────┤
-│  处理日志                                                                │
-│  stage      status   duration   operator                                │
-│  detect     success  120ms     system                                   │
-│  clean      success  3.2s      system                                   │
-│  preprocess success  45s       tag-worker                               │
-├─────────────────────────────────────────────────────────────────────────┤
-│  关联资产（由本 raw 参与合成）                                           │
-│  pick-place-w2-202507  success  175 episodes                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 9.6 资产列表与详情
-
-**列表列**：名称、dataset_id、状态、episode_count、frame_count、标签、合成时间
-
-**详情页区块**：
-
-1. 基本信息（dataset_id、storage_path、规模）
-2. 资产标签（domain=asset）
-3. 来源 raw 表格（raw uuid、manifest_ref、weight、role）
-4. 版本链（parent_asset_id 链接）
-5. 合成配置 JSON（synthesis_config 可视化）
-
-### 9.7 流水线页
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 流水线监控                              job_type [▼]  status [▼]        │
-├─────────────────────────────────────────────────────────────────────────┤
-│  任务流执行历史                                                          │
-│  时间          类型           状态     耗时    in/ok/fail               │
-│  07-16 22:00   daily_ingest   success  5m     120/118/2                 │
-│  07-17 02:00   build_weekly   success  45m    500/498/2                 │
-├─────────────────────────────────────────────────────────────────────────┤
-│  阶段成功率（按 stage × 近7天）                                          │
-│  detect ████████████████████ 99.2%                                      │
-│  clean  ██████████████████░░ 95.1%                                      │
-│  preprocess ████████████████░ 92.0%                                     │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 9.8 分布统计页
-
-| 图表 | 类型 | 维度 |
-|------|------|------|
-| 数据类型分布 | 饼图 | data_type |
-| 来源分布 | 饼图 | source_type |
-| 状态分布 | 柱状 | status |
-| 任务分布 | 条形 | task_name top 20 |
-| 标签热度 | 条形 | tag_paths top 30 |
-| 采集趋势 | 折线 | date × count/frames |
-| 成功率趋势 | 折线 | date × success_rate |
-
-### 9.9 存储页
-
-| 区块 | 内容 |
+| 卡片 | 来源 |
 |------|------|
-| 总览卡片 | raw / staging / lerobot / training 占用 |
-| 趋势图 | storage_snapshots 时序 |
-| 目录树 | 可展开子目录占用（details_json） |
+| 已登记路径数 | TiDB `COUNT(*)` |
+| 可检索 finished 数 | ES `status=finished` |
+| 标签分布 TopN | ES aggs `tag_paths` |
+| 磁盘占用 | 扫描脚本（与 TiDB 无关） |
 
-### 9.10 视觉规范（建议）
-
-| 项 | 规范 |
-|----|------|
-| 主色 | `#1677ff`（操作）、`#52c41a` 成功、`#ff4d4f` 失败、`#faad14` 警告 |
-| 状态色 | init `#8c8c8c`、processing `#1677ff`、finished/success `#52c41a`、anomaly/failure `#ff4d4f` |
-| 布局 | 左侧导航 220px，内容区自适应，列表页左侧标签树 260px |
-| 组件库 | Ant Design / 同类组件库 |
-| 响应式 | ≥1280 完整布局；<1280 标签树折叠为抽屉 |
-
-### 9.11 前后端分工（展示层）
+### 9.6 时序：列表检索
 
 ```mermaid
 sequenceDiagram
-    participant U as 用户浏览器
-    participant API as API 网关
-    participant ES as Elasticsearch
-    participant PG as PostgreSQL
+    participant U as 浏览器
+    participant API
+    participant ES
+    participant TiDB
 
-    U->>API: GET /raw-data/search?tag_filter=...
-    API->>ES: bool query + aggs
-    ES-->>API: uuid 列表 + 摘要
-    API-->>U: 列表 JSON
+    U->>API: search + tag_filter
+    API->>ES: bool query tag_paths
+    ES-->>API: hits
+    API-->>U: 列表
 
-    U->>API: GET /raw-data/{uuid}
-    API->>PG: SELECT + JOIN tags + logs
-    PG-->>API: 详情
-    API-->>U: 详情 JSON
-
-    U->>API: GET /stats/overview
-    API->>ES: size=0 + aggs
-    ES-->>API: 聚合结果
-    API-->>U: KPI JSON
+    U->>API: GET detail uuid
+    API->>TiDB: storage_path, status
+    API->>ES: tag_paths + stats
+    API->>API: 读 metadata_uri 文件
+    API-->>U: 合并详情
 ```
 
 ---
@@ -1091,58 +676,51 @@ sequenceDiagram
 ### 10.1 Outbox 流程
 
 ```
-1. BEGIN
+1. BEGIN (TiDB 事务)
 2. UPDATE raw_data SET status='finished', es_sync_version=es_sync_version+1
-3. UPSERT raw_data_tag ...
-4. INSERT es_sync_outbox (entity_type, entity_id, payload, op='index')
-5. COMMIT
-6. Worker 轮询 pending → bulk index ES → UPDATE es_indexed_at, outbox.status='done'
-7. 失败：retry_count++，指数退避，超 5 次告警
+3. INSERT es_sync_outbox(storage_path, entity_uuid, op='index')
+4. COMMIT
+5. Worker: 读 storage_path → metadata_uri + tags.json → 组装 ES 文档 → bulk index
+6. UPDATE es_indexed_at, outbox.status='done'
 ```
 
-### 10.2 触发同步的事件
+### 10.2 标签变更（不经 TiDB）
 
-| 事件 | 动作 |
+```
+预处理 / 人工 → 更新 tags.json 或直接写 ES
+若走 ES：POST raw_data_records/_update/{uuid} { doc: { tag_paths: [...] } }
+TiDB 无需事务
+```
+
+### 10.3 一致性
+
+| 场景 | 级别 |
 |------|------|
-| raw status → finished | index raw_data_records |
-| raw 标签变更且 status≥correct | update raw_data_records |
-| raw 软删除 | delete ES 文档 |
-| asset status → success/published | index asset_data_records |
-| asset 标签变更 | update |
-| tag_node.path 修改 | 批量刷新所有绑定实体 |
-
-### 10.3 一致性级别
-
-| 场景 | 保证 |
-|------|------|
-| 状态变更后立即读详情 | 强一致（读 PG） |
-| 列表/看板检索 | 最终一致（ES 落后 ≤5s + Worker 延迟） |
-| 幂等 | `_id=uuid` + `sync_version` 防旧覆盖新 |
+| 路径已登记 | TiDB 强一致 |
+| 列表含标签 | ES 最终一致（秒级） |
+| 标签刚改完 | ES 读后即新（直接写 ES 时） |
 
 ---
 
 ## 11. 与 manifest 流水线映射
 
-| manifest / episode 字段 | raw_data 字段 | 说明 |
-|-------------------------|---------------|------|
-| `path` | `manifest_ref` + `storage_path` | 业务唯一键 |
-| `source` | `data_type` / `source_type` | ros→episode_dir, sim→hdf5 等 |
-| `success` | `success_flag` | |
-| `task` | `task_name` | |
-| `frames` | `total_frames` | |
-| `date` | `collected_at` | |
-| `imported_to` | 资产合成后 → `asset_data.dataset_id` | |
+| manifest 字段 | TiDB | ES / 磁盘 |
+|---------------|------|-----------|
+| `path` | `manifest_ref` + `storage_path` | `manifest_ref` |
+| `source` | `data_type` / `source_type` | 冗余到 ES |
+| `success` | — | ES `success_flag`（来自 meta） |
+| `task` | — | ES `task_name` |
+| `frames` | — | ES `total_frames` |
+| 场景标签 | — | **ES `tag_paths` only** |
+| `imported_to` | `asset_data.dataset_id` | ES asset 文档 |
 
-**流水线衔接**：
+**流水线**：
 
 ```
-日终 ingest → INSERT raw_data (init)
-           → processing_log (detect)
-清洗       → UPDATE status=correct|anomaly
-预处理打标 → UPDATE status=finished + raw_data_tag
-           → outbox → ES
-build 完成 → INSERT asset_data (success) + asset_data_raw_source
-           → asset_data_tag → outbox → ES
+ingest  → TiDB INSERT path (init)
+clean   → TiDB UPDATE status
+preprocess → tags.json + TiDB finished + outbox → ES index (tag_paths)
+build   → TiDB asset path + link + outbox → ES asset index
 ```
 
 ---
@@ -1151,11 +729,10 @@ build 完成 → INSERT asset_data (success) + asset_data_raw_source
 
 | 文件 | 说明 |
 |------|------|
-| [appendix-ddl.sql](./appendix-ddl.sql) | PostgreSQL 建表脚本 |
-| [appendix-es-mapping/raw_data_records.json](./appendix-es-mapping/raw_data_records.json) | 原始数据索引 Mapping |
-| [appendix-es-mapping/asset_data_records.json](./appendix-es-mapping/asset_data_records.json) | 资产索引 Mapping |
-| [../lerobot-workflow/data-dashboard-design.md](../lerobot-workflow/data-dashboard-design.md) | 统计看板（episodes/jobs 层）补充设计 |
+| [appendix-ddl.sql](./appendix-ddl.sql) | TiDB 建表（4 表） |
+| [appendix-es-mapping/](./appendix-es-mapping/) | ES Mapping |
+| [appendix-tag-tree.yaml](./appendix-tag-tree.yaml) | 标签树配置 |
 
 ---
 
-*文档结束 · 实现代码见 `robot-data-platform/` 与 `robot-data-dashboard/`，以本设计为准演进。*
+*v1.1 · TiDB 路径管理 + ES 标签 · 实现以本文档为准*
