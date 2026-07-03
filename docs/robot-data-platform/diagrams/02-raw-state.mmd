@@ -1,0 +1,9 @@
+stateDiagram-v2
+    direction LR
+    [*] --> init: 检测入库
+    init --> correct: 清洗通过
+    init --> anomaly: 清洗失败
+    correct --> processing: 预处理开始
+    processing --> finished: 打标完成索引ES
+    finished --> archived: 冷归档
+    anomaly --> init: 人工修复

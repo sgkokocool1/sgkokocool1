@@ -13,27 +13,31 @@ const (
 	IndexAssetDataRecords = "asset_data_records"
 )
 
-// TagFilter 标签筛选：大类之间 OR，同一大类内多选 AND
-// 例：scene=[kitchen, table_a] AND task=[pick_red_block] → 命中同时含厨房+桌A 或 含抓红块 的数据
-type TagFilter map[string][]string
+// CategoryLogic 同一大类内多选逻辑
+type CategoryLogic string
+
+const (
+	CategoryLogicAnd CategoryLogic = "and" // 默认：组内全部命中
+	CategoryLogicOr  CategoryLogic = "or"  // 组内任一命中
+)
+
+// TagCategoryFilter 单个大类的筛选条件
+type TagCategoryFilter struct {
+	Paths []string      `json:"paths"`
+	Op    CategoryLogic `json:"op"` // and | or，默认 and
+}
+
+// TagFilter 标签筛选：大类之间 OR，同一大类内 op 由用户选择 AND/OR
+type TagFilter map[string]TagCategoryFilter
 
 // BuildTagQuery 构建 ES bool 查询
-// - 每个 key（大类）对应一个 should 子句
-// - 子句内对该大类下所有 path 做 must（AND）
-// - 大类之间 minimum_should_match=1（OR）
 func BuildTagQuery(groups TagFilter) map[string]interface{} {
 	should := make([]map[string]interface{}, 0, len(groups))
-	for _, paths := range groups {
-		if len(paths) == 0 {
-			continue
+	for _, group := range groups {
+		clause := buildCategoryClause(group)
+		if clause != nil {
+			should = append(should, clause)
 		}
-		must := make([]map[string]interface{}, 0, len(paths))
-		for _, p := range paths {
-			must = append(must, termTagPath(model.NormalizeTagPath(p)))
-		}
-		should = append(should, map[string]interface{}{
-			"bool": map[string]interface{}{"must": must},
-		})
 	}
 	if len(should) == 0 {
 		return map[string]interface{}{"match_all": map[string]interface{}{}}
@@ -49,6 +53,34 @@ func BuildTagQuery(groups TagFilter) map[string]interface{} {
 	}
 }
 
+func buildCategoryClause(group TagCategoryFilter) map[string]interface{} {
+	terms := make([]map[string]interface{}, 0, len(group.Paths))
+	for _, p := range group.Paths {
+		p = model.NormalizeTagPath(p)
+		if p == "" {
+			continue
+		}
+		terms = append(terms, termTagPath(p))
+	}
+	if len(terms) == 0 {
+		return nil
+	}
+	if len(terms) == 1 {
+		return terms[0]
+	}
+	if group.Op == CategoryLogicOr {
+		return map[string]interface{}{
+			"bool": map[string]interface{}{
+				"should":               terms,
+				"minimum_should_match": 1,
+			},
+		}
+	}
+	return map[string]interface{}{
+		"bool": map[string]interface{}{"must": terms},
+	}
+}
+
 // BuildTagSubtreeQuery 按树节点前缀检索（命中该节点及所有子孙绑定的数据）
 func BuildTagSubtreeQuery(pathPrefix string) map[string]interface{} {
 	prefix := model.NormalizeTagPath(pathPrefix)
@@ -60,7 +92,7 @@ func BuildTagSubtreeQuery(pathPrefix string) map[string]interface{} {
 	}
 }
 
-// BuildTagSubtreeQueryWithSlash 兼容带尾斜杠的前缀，避免 scene/indoor 误匹配 scene/indoor2
+// BuildTagSubtreeQueryWithSlash 带尾斜杠前缀，避免 scene/indoor 误匹配 scene/indoor2
 func BuildTagSubtreeQueryWithSlash(pathPrefix string) map[string]interface{} {
 	prefix := model.NormalizeTagPath(pathPrefix)
 	if prefix == "" {
@@ -80,10 +112,10 @@ func termTagPath(path string) map[string]interface{} {
 // NormalizeTagFilter 规范化筛选输入，按 path 首段自动归到大类
 func NormalizeTagFilter(groups TagFilter) (TagFilter, error) {
 	out := make(TagFilter, len(groups))
-	for category, paths := range groups {
+	for category, group := range groups {
 		category = strings.TrimSpace(category)
-		normalized := make([]string, 0, len(paths))
-		for _, p := range paths {
+		normalized := make([]string, 0, len(group.Paths))
+		for _, p := range group.Paths {
 			p = model.NormalizeTagPath(p)
 			if p == "" {
 				continue
@@ -101,7 +133,14 @@ func NormalizeTagFilter(groups TagFilter) (TagFilter, error) {
 		if key == "" {
 			key = model.TagCategoryFromPath(normalized[0])
 		}
-		out[key] = append(out[key], normalized...)
+		op := group.Op
+		if op != CategoryLogicOr {
+			op = CategoryLogicAnd
+		}
+		existing := out[key]
+		existing.Paths = append(existing.Paths, normalized...)
+		existing.Op = op
+		out[key] = existing
 	}
 	return out, nil
 }
@@ -109,34 +148,18 @@ func NormalizeTagFilter(groups TagFilter) (TagFilter, error) {
 /*
 === DSL 示例 ===
 
-1. 大类 OR + 同大类 AND（scene 内厨房 AND 桌A，或 task 内抓红块）:
+1. scene(AND) + task(OR)，大类之间 OR:
 {
-  "query": {
-    "bool": {
-      "should": [
-        { "bool": { "must": [
-          { "term": { "tag_paths": "scene/indoor/kitchen" } },
-          { "term": { "tag_paths": "scene/indoor/table_a" } }
-        ]}},
-        { "bool": { "must": [
-          { "term": { "tag_paths": "task/pick_red_block" } }
-        ]}}
-      ],
-      "minimum_should_match": 1
-    }
+  "tag_filter": {
+    "scene": { "paths": ["scene/indoor/kitchen", "scene/indoor/table_a"], "op": "and" },
+    "task":  { "paths": ["task/pick_red_block", "task/place_blue_block"], "op": "or" }
   }
 }
+语义: (厨房 AND 桌A) OR (抓红 OR 放蓝)
 
-2. 子树检索（选 scene/indoor 节点，命中其下所有叶子）:
+2. 单大类组内 OR:
+{ "tag_filter": { "scene": { "paths": ["scene/indoor/kitchen", "scene/outdoor"], "op": "or" } } }
+
+3. 子树检索:
 { "prefix": { "tag_paths": "scene/indoor/" } }
-
-3. 看板聚合（按 path 首段分大类）:
-GET raw_data_records/_search
-{
-  "size": 0,
-  "aggs": {
-    "by_status": { "terms": { "field": "status" } },
-    "top_tag_paths": { "terms": { "field": "tag_paths", "size": 50 } }
-  }
-}
 */

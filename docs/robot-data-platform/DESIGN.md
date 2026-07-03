@@ -1,6 +1,6 @@
 # 机器人数据平台 · 详细设计文档
 
-> **版本**：v1.1  
+> **版本**：v1.2  
 > **范围**：原始数据（raw）与资产数据（asset）的路径管理、ES 检索与标签、看板展示  
 > **定位**：纯设计文档，与代码实现解耦  
 > **DDL**：[appendix-ddl.sql](./appendix-ddl.sql)（TiDB） · **ES Mapping**：[appendix-es-mapping/](./appendix-es-mapping/) · **标签树**：[appendix-tag-tree.yaml](./appendix-tag-tree.yaml)
@@ -39,7 +39,7 @@
 | 目标 | 方案 |
 |------|------|
 | 管理库极简 | TiDB 4 张表，核心字段是 `storage_path` |
-| 标签灵活检索 | 标签只写 ES；大类 OR、同大类 AND |
+| 标签灵活检索 | 标签只写 ES；**大类之间 OR**；**同大类内多选由用户选 AND / OR** |
 | 检索性能 | 列表/筛选/看板走 ES |
 | 路径可追溯 | TiDB 路径登记 + `asset_raw_link` |
 | 与 manifest 对齐 | `manifest_ref` / `storage_path` 对应 manifest `path` |
@@ -279,12 +279,25 @@ stateDiagram-v2
 
 ### 5.3 查询语义
 
-| 层级 | 逻辑 |
-|------|------|
-| **不同 category** | **OR** |
-| **同一 category 内多选** | **AND** |
+| 层级 | 逻辑 | 是否可配置 |
+|------|------|------------|
+| **不同 category 之间** | **OR** | 固定（满足任一大类条件即可） |
+| **同一 category 内多选** | **AND 或 OR** | **用户可选**，默认 `and` |
 
-示例：`(厨房 AND 桌A) OR 抓红块` → 见 [§7.2](#72-标签组合查询核心)
+**组合公式**：
+
+```
+命中 ⟺ 满足 category_A 组条件  OR  category_B 组条件  OR  …
+其中每组条件 = 按该组 op 对组内 path 做 AND 或 OR
+```
+
+| 场景 | scene 组 | task 组 | 语义 |
+|------|----------|-------|------|
+| 默认 | `op: and` 厨房+桌A | `op: and` 抓红块 | (厨房∧桌A) ∨ 抓红块 |
+| 场景任选 | `op: or` 厨房\|室外 | — | 厨房 ∨ 室外 |
+| 混合 | `op: or` 厨房\|桌A | `op: and` 抓红∧高质量 | (厨房∨桌A) ∨ (抓红∧高质量) |
+
+详见 [§7.2](#72-标签组合查询核心)。
 
 ### 5.4 标签树配置（YAML）
 
@@ -409,18 +422,26 @@ API 建议：`GET /api/v1/tag-tree?domain=raw` 直接返回 YAML 解析结果，
 
 ### 7.2 标签组合查询（核心）
 
-**请求**：
+**请求结构**：每个 category 带 `paths` + `op`（`and` | `or`，默认 `and`）。
 
 ```json
 {
   "tag_filter": {
-    "scene": ["scene/indoor/kitchen", "scene/indoor/table_a"],
-    "task": ["task/pick_red_block"]
+    "scene": {
+      "paths": ["scene/indoor/kitchen", "scene/indoor/table_a"],
+      "op": "and"
+    },
+    "task": {
+      "paths": ["task/pick_red_block", "task/place_blue_block"],
+      "op": "or"
+    }
   }
 }
 ```
 
-**ES DSL**：
+**语义**：`(厨房 AND 桌A) OR (抓红块 OR 放蓝块)`
+
+#### 7.2.1 ES DSL（上例）
 
 ```json
 {
@@ -437,9 +458,11 @@ API 建议：`GET /api/v1/tag-tree?domain=raw` 直接返回 YAML 解析结果，
         },
         {
           "bool": {
-            "must": [
-              { "term": { "tag_paths": "task/pick_red_block" } }
-            ]
+            "should": [
+              { "term": { "tag_paths": "task/pick_red_block" } },
+              { "term": { "tag_paths": "task/place_blue_block" } }
+            ],
+            "minimum_should_match": 1
           }
         }
       ],
@@ -448,6 +471,73 @@ API 建议：`GET /api/v1/tag-tree?domain=raw` 直接返回 YAML 解析结果，
   }
 }
 ```
+
+#### 7.2.2 仅单 category、组内 OR
+
+请求：
+
+```json
+{
+  "tag_filter": {
+    "scene": {
+      "paths": ["scene/indoor/kitchen", "scene/outdoor"],
+      "op": "or"
+    }
+  }
+}
+```
+
+DSL（无需外层 should，单组即可）：
+
+```json
+{
+  "query": {
+    "bool": {
+      "should": [
+        { "term": { "tag_paths": "scene/indoor/kitchen" } },
+        { "term": { "tag_paths": "scene/outdoor" } }
+      ],
+      "minimum_should_match": 1
+    }
+  }
+}
+```
+
+#### 7.2.3 仅单 category、组内 AND
+
+```json
+{
+  "tag_filter": {
+    "scene": {
+      "paths": ["scene/indoor/kitchen", "scene/indoor/table_a"],
+      "op": "and"
+    }
+  }
+}
+```
+
+```json
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "tag_paths": "scene/indoor/kitchen" } },
+        { "term": { "tag_paths": "scene/indoor/table_a" } }
+      ]
+    }
+  }
+}
+```
+
+#### 7.2.4 构建规则（实现参考）
+
+| 步骤 | 规则 |
+|------|------|
+| 1 | 每个 category → 一个子句 `buildCategoryClause(paths, op)` |
+| 2 | `op=and` → `bool.must`；`op=or` → `bool.should` + `minimum_should_match:1` |
+| 3 | 仅 1 个 path → 直接 `term`，忽略 op |
+| 4 | 多个 category → 外层 `bool.should` + `minimum_should_match:1` |
+| 5 | 仅 1 个 category → 直接返回该组子句，不加外层 should |
 
 ### 7.3 子树检索
 
@@ -616,11 +706,17 @@ flowchart TB
 │ 标签树       │  [搜索] 状态[▼] 类型[▼] 日期[──●──]           [搜索]      │
 │ (YAML 加载)  │ ─────────────────────────────────────────────────────────  │
 │ ▼ scene      │  路径 manifest_ref          状态    标签        采集时间  │
-│   ☑ kitchen  │  .../episode_007            finished 厨房,抓红块  07-16    │
-│ ▼ task       │                                                          │
-│   ☑ pick_red │  筛选走 ES · 路径列可跳转 TiDB 详情                       │
+│  组内 [且▼]  │  .../episode_007            finished 厨房,抓红块  07-16    │
+│   ☑ kitchen  │  .../episode_008            finished 厨房,桌A      07-16    │
+│   ☑ table_a  │                                                          │
+│ ▼ task       │  已选摘要: scene(且) 厨房+桌A | task(或) 抓红块          │
+│  组内 [或▼]  │  大类之间固定 OR · 组内 AND/OR 用户可切换                  │
+│   ☑ pick_red │                                                          │
+│   ☐ place_bl │                                                          │
 └──────────────┴──────────────────────────────────────────────────────────┘
 ```
+
+**组内逻辑切换**：每个 category 标题旁下拉 `且(AND)` / `或(OR)`，仅当该组勾选 ≥2 个叶子时生效；单选时 op 无影响。
 
 ### 9.3 详情页分区
 
@@ -631,13 +727,17 @@ flowchart TB
 | 标签 | **ES** `tag_paths`；编辑保存只调 ES API |
 | 关联资产 | **ES** 或 TiDB `asset_raw_link` |
 
-### 9.4 标签编辑交互
+### 9.4 标签筛选交互
 
 | 操作 | 行为 |
 |------|------|
-| 勾选叶子 | 更新本地筛选条件 → ES 查询 |
-| 保存标签 | PATCH ES，**不写 TiDB** |
-| 树节点展示名 | 来自 YAML，非 DB |
+| 勾选叶子 | 加入该 category 组 |
+| 切换「且/或」 | 更新该组 `op`，立即重查 ES |
+| 组内 AND | 数据须**同时**含组内所有已选 tag |
+| 组内 OR | 数据含组内**任一**已选 tag 即可 |
+| 跨组 | 固定 **OR**（满足任一组即可） |
+| 保存标签（详情页） | PATCH ES，不写 TiDB |
+| 树节点展示名 | 来自 YAML |
 
 ### 9.5 总览 KPI
 
