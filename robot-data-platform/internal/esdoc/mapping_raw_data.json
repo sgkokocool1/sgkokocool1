@@ -43,31 +43,7 @@
       "duration_sec": { "type": "double" },
       "fps": { "type": "float" },
       "success_flag": { "type": "boolean" },
-      "tags": {
-        "type": "nested",
-        "properties": {
-          "id": { "type": "long" },
-          "code": { "type": "keyword" },
-          "name": {
-            "type": "text",
-            "fields": { "keyword": { "type": "keyword" } }
-          },
-          "path": { "type": "keyword" },
-          "full_name": { "type": "text" },
-          "level": { "type": "short" },
-          "domain": { "type": "keyword" },
-          "source": { "type": "keyword" },
-          "confidence": { "type": "float" }
-        }
-      },
-      "tag_ids": { "type": "long" },
       "tag_paths": { "type": "keyword" },
-      "tag_codes": { "type": "keyword" },
-      "tag_names": {
-        "type": "text",
-        "fields": { "keyword": { "type": "keyword" } }
-      },
-      "tag_text": { "type": "text", "analyzer": "tag_text_analyzer" },
       "collected_at": { "type": "date" },
       "detected_at": { "type": "date" },
       "cleaned_at": { "type": "date" },

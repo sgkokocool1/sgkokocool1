@@ -39,31 +39,7 @@
       "fps": { "type": "float" },
       "source_raw_data_ids": { "type": "long" },
       "source_raw_data_uuids": { "type": "keyword" },
-      "tags": {
-        "type": "nested",
-        "properties": {
-          "id": { "type": "long" },
-          "code": { "type": "keyword" },
-          "name": {
-            "type": "text",
-            "fields": { "keyword": { "type": "keyword" } }
-          },
-          "path": { "type": "keyword" },
-          "full_name": { "type": "text" },
-          "level": { "type": "short" },
-          "domain": { "type": "keyword" },
-          "source": { "type": "keyword" },
-          "confidence": { "type": "float" }
-        }
-      },
-      "tag_ids": { "type": "long" },
       "tag_paths": { "type": "keyword" },
-      "tag_codes": { "type": "keyword" },
-      "tag_names": {
-        "type": "text",
-        "fields": { "keyword": { "type": "keyword" } }
-      },
-      "tag_text": { "type": "text", "analyzer": "tag_text_analyzer" },
       "auditor_id": { "type": "keyword" },
       "audit_score": { "type": "float" },
       "parent_asset_id": { "type": "long" },
