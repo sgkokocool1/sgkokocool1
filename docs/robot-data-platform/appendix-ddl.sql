@@ -85,3 +85,30 @@ CREATE TABLE es_sync_outbox (
     processed_at    DATETIME DEFAULT NULL,
     KEY idx_outbox_pending (entity_type, status, created_at)
 ) COMMENT='ES 同步 Outbox';
+
+-- ============================================================
+-- 5. data_task_rel 数据 ↔ 流水线任务关联（任务完成度统计）
+-- ============================================================
+
+CREATE TABLE data_task_rel (
+    id              BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    entity_type     VARCHAR(16) NOT NULL COMMENT 'raw_data / asset_data',
+    entity_id       BIGINT NOT NULL COMMENT 'raw_data.id 或 asset_data.id',
+    storage_path    VARCHAR(1024) NOT NULL COMMENT '冗余路径，便于统计与看板展示',
+    task_code       VARCHAR(32) NOT NULL COMMENT 'detect/clean/preprocess/audit/synthesize/tag',
+    status          VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/running/success/failed/skipped',
+    sort_order      SMALLINT NOT NULL DEFAULT 0 COMMENT '流水线顺序',
+    started_at      DATETIME DEFAULT NULL COMMENT '最近一次开始',
+    finished_at     DATETIME DEFAULT NULL COMMENT '最近一次完成',
+    duration_ms     BIGINT NOT NULL DEFAULT 0,
+    job_id          BIGINT DEFAULT NULL COMMENT '批任务ID',
+    attempt_count   INT NOT NULL DEFAULT 0 COMMENT '累计执行次数',
+    error_message   TEXT,
+    output_json     JSON DEFAULT NULL COMMENT '任务输出摘要',
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_entity_task (entity_type, entity_id, task_code),
+    KEY idx_task_storage_path (storage_path),
+    KEY idx_task_code_status (task_code, status),
+    KEY idx_task_entity (entity_type, entity_id)
+) COMMENT='数据任务关联：每条数据每个任务一行，记录最新完成状态';

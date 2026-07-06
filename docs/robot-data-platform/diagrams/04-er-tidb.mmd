@@ -1,4 +1,6 @@
 erDiagram
+    RAW_DATA ||--o{ DATA_TASK_REL : has_tasks
+    ASSET_DATA ||--o{ DATA_TASK_REL : has_tasks
     RAW_DATA ||--o{ ASSET_RAW_LINK : sources
     ASSET_DATA ||--o{ ASSET_RAW_LINK : composed_from
     RAW_DATA ||--o{ ES_SYNC_OUTBOX : syncs
@@ -8,8 +10,6 @@ erDiagram
         bigint id PK
         char uuid UK
         varchar storage_path UK
-        varchar manifest_ref
-        varchar metadata_uri
         varchar status
     }
 
@@ -17,19 +17,23 @@ erDiagram
         bigint id PK
         char uuid UK
         varchar storage_path UK
-        varchar dataset_id
+        varchar status
+    }
+
+    DATA_TASK_REL {
+        bigint id PK
+        varchar entity_type
+        bigint entity_id
+        varchar task_code
         varchar status
     }
 
     ASSET_RAW_LINK {
         bigint asset_id FK
         bigint raw_id FK
-        varchar raw_storage_path
     }
 
     ES_SYNC_OUTBOX {
         bigint id PK
         varchar storage_path
-        varchar entity_type
-        json payload
     }

@@ -1,6 +1,6 @@
 # 机器人数据平台 · 详细设计文档
 
-> **版本**：v1.2  
+> **版本**：v1.3  
 > **范围**：原始数据（raw）与资产数据（asset）的路径管理、ES 检索与标签、看板展示  
 > **定位**：纯设计文档，与代码实现解耦  
 > **DDL**：[appendix-ddl.sql](./appendix-ddl.sql)（TiDB） · **ES Mapping**：[appendix-es-mapping/](./appendix-es-mapping/) · **标签树**：[appendix-tag-tree.yaml](./appendix-tag-tree.yaml)
@@ -38,7 +38,7 @@
 
 | 目标 | 方案 |
 |------|------|
-| 管理库极简 | TiDB 4 张表，核心字段是 `storage_path` |
+| 管理库极简 | TiDB 5 张核心表 + 任务关联表，核心是 `storage_path` |
 | 标签灵活检索 | 标签只写 ES；**大类之间 OR**；**同大类内多选由用户选 AND / OR** |
 | 检索性能 | 列表/筛选/看板走 ES |
 | 路径可追溯 | TiDB 路径登记 + `asset_raw_link` |
@@ -175,6 +175,33 @@ stateDiagram-v2
 
 **TiDB 全程不涉及标签表。**
 
+### 3.4 数据任务关联（`data_task_rel`）
+
+每条数据在入库时初始化一组流水线任务（全部 `pending`）。**每当某个任务执行完成，UPSERT 更新该数据对应任务行的状态**；`processing_log` 仍记录每次执行的明细日志。
+
+| 实体 | 任务序列（task_code） |
+|------|----------------------|
+| `raw_data` | detect → clean → preprocess → tag |
+| `asset_data` | audit → synthesize → tag |
+
+| 任务状态 | 含义 |
+|----------|------|
+| `pending` | 未开始 |
+| `running` | 执行中 |
+| `success` | 成功完成 |
+| `failed` | 失败 |
+| `skipped` | 跳过（计入已完成） |
+
+**写入时机**：
+
+```
+数据登记 INSERT raw_data
+  → InitDataTaskRels（4 行 pending）
+
+任务开始 → UpsertDataTaskRel(status=running)
+任务结束 → UpsertDataTaskRel(status=success|failed) + INSERT processing_log
+```
+
 ---
 
 ## 4. TiDB 表结构设计（路径管理库）
@@ -188,6 +215,7 @@ stateDiagram-v2
 | `raw_data` | 原始数据路径登记 | `storage_path` UNIQUE |
 | `asset_data` | 资产路径登记 | `storage_path` UNIQUE |
 | `asset_raw_link` | 资产←原始路径血缘 | `raw_storage_path` |
+| `data_task_rel` | **数据↔任务完成关联** | `(entity_type, entity_id, task_code)` |
 | `es_sync_outbox` | TiDB → ES 同步队列 | `storage_path` |
 
 **明确不建的表**：`tag_node`、`raw_data_tag`、`asset_data_tag`（标签不进库）
@@ -236,7 +264,36 @@ stateDiagram-v2
 
 约束：`UNIQUE(asset_id, raw_id)`
 
-### 4.5 `es_sync_outbox`
+### 4.5 `data_task_rel` 数据任务关联表
+
+**用途**：记录每条数据在各流水线任务上的**最新完成状态**，用于详情页任务进度与看板统计。
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | BIGINT | PK | |
+| `entity_type` | VARCHAR(16) | NOT NULL | `raw_data` / `asset_data` |
+| `entity_id` | BIGINT | NOT NULL | 关联 `raw_data.id` 或 `asset_data.id` |
+| `storage_path` | VARCHAR(1024) | INDEX | 冗余路径 |
+| `task_code` | VARCHAR(32) | NOT NULL | detect/clean/preprocess/audit/synthesize/tag |
+| `status` | VARCHAR(16) | NOT NULL | pending/running/success/failed/skipped |
+| `sort_order` | SMALLINT | | 流水线顺序 |
+| `started_at` / `finished_at` | DATETIME | | 最近一次执行时间 |
+| `duration_ms` | BIGINT | | 耗时 |
+| `job_id` | BIGINT | | 批任务 ID |
+| `attempt_count` | INT | | 累计执行次数 |
+| `error_message` | TEXT | | 失败原因 |
+| `output_json` | JSON | | 输出摘要 |
+
+约束：`UNIQUE(entity_type, entity_id, task_code)` — 每个数据每个任务仅一行。
+
+与 `processing_log` 分工：
+
+| 表 | 粒度 | 用途 |
+|----|------|------|
+| `data_task_rel` | 每数据每任务 **1 行（最新态）** | 完成度统计、详情进度条 |
+| `processing_log` | 每次执行 **1 行** | 审计、排错、耗时分析 |
+
+### 4.6 `es_sync_outbox`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -248,7 +305,7 @@ stateDiagram-v2
 | `payload` | JSON | 可选预组装文档；空则 Worker 从路径读取 |
 | `status` | VARCHAR(16) | pending / done / failed |
 
-### 4.6 TiDB 使用注意
+### 4.7 TiDB 使用注意
 
 | 项 | 建议 |
 |----|------|
@@ -582,6 +639,64 @@ GET raw_data_records/_search
 | GET | `/api/v1/tag-tree` | YAML 配置 |
 | POST | `/api/v1/raw-data/register` | TiDB 登记路径 |
 | GET | `/api/v1/assets/search` | ES |
+| GET | `/api/v1/raw-data/{uuid}/tasks` | TiDB `data_task_rel` |
+| GET | `/api/v1/raw-data/{uuid}/task-progress` | TiDB 聚合完成度 |
+
+### 7.7 任务完成度统计
+
+#### 7.7.1 单条数据完成情况
+
+```sql
+SELECT
+    entity_id,
+    storage_path,
+    COUNT(*) AS total_tasks,
+    SUM(CASE WHEN status IN ('success', 'skipped') THEN 1 ELSE 0 END) AS completed_tasks,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_tasks,
+    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_tasks,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_tasks,
+    ROUND(100.0 * SUM(CASE WHEN status IN ('success', 'skipped') THEN 1 ELSE 0 END) / COUNT(*), 1) AS progress_pct
+FROM data_task_rel
+WHERE entity_type = 'raw_data' AND entity_id = ?
+GROUP BY entity_id, storage_path;
+```
+
+Go：`model.GetDataTaskProgress(db, EntityRawData, id)`
+
+#### 7.7.2 按任务类型统计全局成功率
+
+```sql
+SELECT
+    task_code,
+    status,
+    COUNT(*) AS cnt
+FROM data_task_rel
+WHERE entity_type = 'raw_data'
+GROUP BY task_code, status
+ORDER BY task_code, status;
+```
+
+#### 7.7.3 未完成全部任务的数据列表
+
+```sql
+SELECT entity_id, storage_path,
+    SUM(CASE WHEN status IN ('success', 'skipped') THEN 1 ELSE 0 END) AS done,
+    COUNT(*) AS total
+FROM data_task_rel
+WHERE entity_type = 'raw_data'
+GROUP BY entity_id, storage_path
+HAVING done < total;
+```
+
+#### 7.7.4 看板 KPI 示例
+
+| 指标 | SQL 思路 |
+|------|----------|
+| 原始数据平均完成度 | AVG(progress_pct) 按 entity 分组后求平均 |
+| 清洗失败数 | `task_code='clean' AND status='failed'` COUNT |
+| 卡在预处理的数据 | preprocess 非 success 且 clean 已 success |
+
+任务完成度变更**不写 ES**（可选二期冗余 `task_progress_pct` 到 ES 文档用于列表排序）。
 
 ---
 
@@ -591,6 +706,8 @@ GET raw_data_records/_search
 
 ```mermaid
 erDiagram
+    RAW_DATA ||--o{ DATA_TASK_REL : has_tasks
+    ASSET_DATA ||--o{ DATA_TASK_REL : has_tasks
     RAW_DATA ||--o{ ASSET_RAW_LINK : "raw_storage_path"
     ASSET_DATA ||--o{ ASSET_RAW_LINK : asset_id
     RAW_DATA ||--o{ ES_SYNC_OUTBOX : syncs
@@ -618,6 +735,15 @@ erDiagram
         bigint asset_id FK
         bigint raw_id FK
         varchar raw_storage_path
+    }
+
+    DATA_TASK_REL {
+        bigint id PK
+        varchar entity_type
+        bigint entity_id
+        varchar storage_path
+        varchar task_code
+        varchar status
     }
 
     ES_SYNC_OUTBOX {

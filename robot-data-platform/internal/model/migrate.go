@@ -14,6 +14,7 @@ func AutoMigrateAll(db *gorm.DB) error {
 		&RawDataTag{},
 		&AssetDataTag{},
 		&ProcessingLog{},
+		&DataTaskRel{},
 		&ESSyncOutbox{},
 	)
 }
