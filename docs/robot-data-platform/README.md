@@ -6,6 +6,7 @@
 |------|------|
 | [DESIGN.md](./DESIGN.md) | v1.x 设计（路径表 + ES 标签，**建议阅后对照 v2 调研**） |
 | [industry-benchmark-and-redesign.md](./industry-benchmark-and-redesign.md) | **业内方案调研 + v2 架构建议（推荐阅读）** |
+| [end-to-end-business-workflow.md](./end-to-end-business-workflow.md) | **端到端业务流程举例**（采集→训练全链路） |
 | [飞书文档-机器人数据平台设计.md](./飞书文档-机器人数据平台设计.md) | **飞书粘贴版**（正文 + 配图说明） |
 | [images/](./images/) | **配图 PNG**（9 张，复制到飞书） |
 | [diagrams/](./diagrams/) | Mermaid 图源，`render.sh` 重新出图 |
