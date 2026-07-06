@@ -384,6 +384,8 @@ DatasetRevision.lineage            → 指向 Episode urn 列表 + build commit/
 
 ## 7. 与现有 LeRobot 流水线的衔接
 
+> **业务举例**：逐步场景见 [端到端业务流程举例](./end-to-end-business-workflow.md)（`episode_007` 从采集到训练）。
+
 | 现有资产 | v2 映射 |
 |----------|---------|
 | `manifest.jsonl` | Bronze 登记源；每行 → Episode Aspect `collection` |

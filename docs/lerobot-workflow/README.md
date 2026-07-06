@@ -1,7 +1,8 @@
 # LeRobot 数据流水线：完整操作流程
 
 > **一站式手册**：涵盖 LeRobot v3 格式解读、本地服务器日常采集、按需构建数据集、按周/按子集训练。  
-> 理论详解见 [lerobot-dataset-v3-guide.md](../lerobot-dataset-v3-guide.md)。
+> 理论详解见 [lerobot-dataset-v3-guide.md](../lerobot-dataset-v3-guide.md)。  
+> **业务全链路举例**（采集→清洗→标注→统计→打包→训练）见 [端到端业务流程](../robot-data-platform/end-to-end-business-workflow.md)。
 
 ---
 
